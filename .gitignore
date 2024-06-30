@@ -7,3 +7,5 @@ work_dirs
 wandb
 .idea
 __pycache__/
+tokens
+captioning/gpt_cfg.yaml

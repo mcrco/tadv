@@ -51,6 +51,7 @@ def parse_args():
     parser.add_argument('--params_name', type=str, default=None, help='params string (added to end of file name)')
     parser.add_argument('--do_blip', action='store_true', default=False)
     parser.add_argument('--do_gpt_summary', action='store_true', default=False)
+    parser.add_argument('--load_summaries', type=str, default=None, help='file to load gpt summaries from')
 
     # Blip Generation parameters
 
@@ -101,21 +102,35 @@ def main():
     if args.do_gpt_summary:
         cfg = yaml.load(open("./captioning/gpt_cfg.yaml", "r"), Loader=yaml.FullLoader)
         gpt = GPTInterface(cfg)
-        with open(os.path.join('./captions/', frame_caption_file)) as f:
+        out_path = './captions'
+
+        with open(os.path.join(out_path, frame_caption_file)) as f:
             captions = json.load(f)
 
         prompt = "summarize what might be happening in a video given the following sequential frame captions, \
                   but do not mention anything about the video itself, such as starting the summary with 'this video shows' or the like: "
 
         video_captions = {}
+        if args.load_summaries is not None:
+            with open(os.path.join(out_path, args.dataset + '_captions.json')) as f:
+                video_captions = json.load(f)
+
+        count = 0
+        os.makedirs(out_path, exist_ok=True)
         for vid in tqdm(os.listdir(frame_root)):
+            if vid in video_captions:
+                continue
+
             gpt_batch = captions[vid]
             gpt_batch = ', '.join(gpt_batch)
             _prompt = prompt + gpt_batch
             video_captions[vid] = gpt.general_gpt_task(_prompt)
 
-        out_path = './captions'
-        os.makedirs(out_path, exist_ok=True)
+            if count % 500 == 0:
+                with open(os.path.join(out_path, args.dataset + '_captions.json'), 'w') as f:
+                    json.dump(video_captions, f)
+            count += 1
+
         with open(os.path.join(out_path, args.dataset + '_captions.json'), 'w') as f:
             json.dump(video_captions, f)
 

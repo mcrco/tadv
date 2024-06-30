@@ -38,7 +38,6 @@ def main():
     parser.add_argument('--dreambooth_checkpoint', type=str, default=None, help='path to dreambooth checkpoint')
     parser.add_argument('--textual_inversion_token_path', type=str, default=None,
                         help='path to textual inversion token path')
-    parser.add_argument("--train_dataset_name", default="pascal", type=str)
 
     parser.add_argument("--exp_name", type=str)
     parser.add_argument("--num_workers", type=int, default=8)

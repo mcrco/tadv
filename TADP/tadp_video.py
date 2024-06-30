@@ -6,15 +6,11 @@ from typing import Dict, List, Tuple
 
 import lightning.pytorch as pl
 import numpy as np
-import segmentation_models_pytorch as smp
 import torch
-import torch.nn.functional as F
 from torchmetrics import Accuracy
 import torchvision
 import torchvision.transforms.v2.functional
 import wandb
-from PIL import Image
-from chainercv.evaluations import eval_detection_voc
 # our stuff
 from diffusers.utils.hub_utils import _get_model_file
 from huggingface_hub.constants import HF_HUB_CACHE as DIFFUSERS_CACHE
@@ -22,10 +18,8 @@ from huggingface_hub.constants import HF_HUB_CACHE as DIFFUSERS_CACHE
 from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from omegaconf import OmegaConf
-from torch import nn, Tensor
+from torch import nn
 from torchvision import datapoints
-from torchvision.models.detection.anchor_utils import AnchorGenerator
-from detectron2.structures.instances import Instances
 from ldm.util import instantiate_from_config
 
 from TADP.vpd.models import UNetWrapper, TextAdapter
