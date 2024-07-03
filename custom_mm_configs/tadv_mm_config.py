@@ -2,9 +2,10 @@ proj_dir = '/home/marco/dev/tadv/'
 config_root_dir = proj_dir + 'BEAR/benchmark/BEAR-Standard/configs/'
 tadv_path = config_root_dir + '_base_/models/tadv.py'
 default_runtime_path = config_root_dir + '_base_/default_runtime.py'
+wandb_runtime_path = config_root_dir + '_base_/wandb_runtime.py'
 
 _base_ = [
-        tadv_path, default_runtime_path
+        tadv_path, wandb_runtime_path
 ]
 
 cfg = {}
