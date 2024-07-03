@@ -1,0 +1,3 @@
+[submodule "BEAR"]
+	path = BEAR
+	url = https://github.com/mcrco/BEAR.git

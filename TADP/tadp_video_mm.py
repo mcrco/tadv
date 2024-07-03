@@ -3,7 +3,6 @@ import os
 import pickle
 import warnings
 from typing import Dict, List, Tuple
-import cv2
 
 import lightning.pytorch as pl
 import numpy as np
@@ -25,29 +24,19 @@ from ldm.util import instantiate_from_config
 
 from TADP.vpd.models import UNetWrapper, TextAdapter
 
-class BasicDecoder(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.mean = lambda x : torch.mean(x, 1) # first dim is video, second dim is frames
-        self.flatten = nn.Flatten()
-        self.cls_head = nn.Linear(320 * 64 * 64, 51) # 51 classes in HMDB
-
-    def forward(self, x):
-        x = self.mean(x)
-        x = self.flatten(x)
-        x = self.cls_head(x)
-        return x
-
+@BACKBONES.register_module()
 class TADPVid(pl.LightningModule):
 
     def __init__(self,
                  sd_path='checkpoints/v1-5-pruned-emaonly.ckpt',
                  unet_config=dict(),
                  class_embedding_path='ade_class_embeddings.pth',
+                 gamma_init_value=1e-4,
+                 neck=None,
                  train_cfg=None,
                  test_cfg=None,
+                 init_cfg=None,
                  use_decoder=False,
-                 use_decode_head=True,
                  cfg=None,
                  class_names=None,
                  freeze_backbone=False,
@@ -169,10 +158,6 @@ class TADPVid(pl.LightningModule):
 
         self.with_neck = True
 
-        self.use_decode_head = use_decode_head
-        if use_decode_head:
-            self.decode_head = BasicDecoder()
-
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         # assert self.with_decode_head
@@ -288,9 +273,6 @@ class TADPVid(pl.LightningModule):
         return outs
 
     def forward(self, x, img_metas=None):
-        if x.type() != torch.cuda.FloatTensor:
-            x = x.float()
-        tensor_to_video(x[0], fps=4)
         captions = None
         if self.blip_captions is not None and img_metas is not None:
             captions = [self.blip_captions[name] for name in img_metas]
@@ -302,39 +284,7 @@ class TADPVid(pl.LightningModule):
             video_features.append(features[0]) 
         features = torch.stack(video_features)
 
-        if not self.use_decode_head:
-            return features
-
-        x = self.decode_head(features) 
-        return x
-
-    def inference(self, img, captions=None):
-        x = [torchvision.transforms.ToTensor()(x) for x in img]
-
-        orig_images = [torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                        std=[0.229, 0.224, 0.225])(x) for x in x]
-        orig_images = [datapoints.Image(x) for x in orig_images]
-
-        from torchvision.transforms import v2 as T
-        _size = 512
-        trans = T.Compose(
-            [
-                T.Resize((_size, _size)),
-            ]
-        )
-        orig_images = trans(orig_images)
-
-        orig_images = torch.stack(orig_images)
-        orig_images = torchvision.models.detection.image_list.ImageList(orig_images,
-                                                                        image_sizes=[(_size, _size)] * len(orig_images))
-
-        orig_images_tensors = orig_images.tensors.to(self.device)
-
-        features = self.extract_feat(orig_images_tensors, texts=captions)
-
-        x = self.decode_head(features[0])
-
-        return x
+        return features
 
     def configure_optimizers(self):
         # TODO: double check here
@@ -427,20 +377,5 @@ class TADPVid(pl.LightningModule):
                 'cross_att_maps': [wandb.Image(ca_map, caption=self.blip_captions[metas[0]]) for ca_map in ca_maps]
             })
 
-def tensor_to_video(tensor, output_file='out/output_video.avi', fps=30):
-    frames = tensor.cpu().numpy()  # Convert PyTorch tensor to numpy array
-    
-    # Transpose to (num_frames, height, width, channels) for OpenCV compatibility
-    frames = frames.transpose((0, 2, 3, 1))
-    
-    # OpenCV video writer
-    _, height, width, _ = frames.shape  # shape is (num_frames, height, width, channels)
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
-    
-    for frame in frames:
-        frame = np.uint8(frame)  # Convert frame to uint8
-        out.write(frame)
-    
-    out.release()
+
 

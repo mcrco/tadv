@@ -187,7 +187,6 @@ def main():
     #     print(f'Train dataset {args.train_dataset[tdi]}: {len(td)} samples')
 
     cfg = yaml.load(open("./sd_tune.yaml", "r"), Loader=yaml.FullLoader)
-    cfg["annotator"]["type"] = "ground_truth"
     cfg["stable_diffusion"]["use_diffusion"] = True
     cfg["max_epochs"] = max_epochs
     cfg["dataset_len"] = len(train_loader)
@@ -215,7 +214,6 @@ def main():
 
     cfg['dreambooth_checkpoint'] = args.dreambooth_checkpoint
     cfg['textual_inversion_token_path'] = args.textual_inversion_token_path
-    cfg['dataset_len'] = 1
     cfg['val_dataset_name'] = args.val_dataset_name
     cfg['cross_blip_caption_path'] = args.cross_blip_caption_path
 
