@@ -23,8 +23,9 @@ if [ "$TARGET" = "tsh" ]; then
     TEST_FILE="$PROJ_ROOT/BEAR/benchmark/BEAR-UDA/data/toyota_smarthome_mpii_cooking/toyota_smarthome_da_test.csv"
 fi
 
-WORK_DIR="${PROJ_ROOT}/out/tadv/$SOURCE-$TARGET"
-
+timestamp=$(date +"%Y-%m-%d_%H_%M_%S")
+WORK_DIR="${PROJ_ROOT}/out/tadv/$SOURCE-$TARGET/$timestamp"
+mkdir $WORK_DIR
 
 export PYTHONPATH="$(dirname $SCRIPT)/..":$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=$3
