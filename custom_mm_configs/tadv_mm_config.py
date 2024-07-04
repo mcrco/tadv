@@ -77,6 +77,22 @@ train_pipeline = [
     dict(type='Collect', keys=['imgs', 'label'], meta_keys=[]),
     dict(type='ToTensor', keys=['imgs', 'label'])
 ]
+val_pipeline = [
+    dict(
+        type='SampleFrames',
+        clip_len=8,
+        frame_interval=8,
+        num_clips=10,
+        test_mode=True),
+    dict(type='RawFrameDecode'),
+    dict(type='Resize', scale=(-1, 256)),
+    dict(type='ThreeCrop', crop_size=256),
+    dict(type='Flip', flip_ratio=0),
+    # dict(type='Normalize', **img_norm_cfg),
+    dict(type='FormatShape', input_format='NTCHW'),
+    dict(type='Collect', keys=['imgs', 'label'], meta_keys=[]),
+    dict(type='ToTensor', keys=['imgs'])
+]
 test_pipeline = [
     dict(
         type='SampleFrames',
@@ -97,12 +113,12 @@ data = dict(
     videos_per_gpu=8,
     workers_per_gpu=4,
     val_dataloader=dict(
-        videos_per_gpu=1,
-        workers_per_gpu=1
+        videos_per_gpu=8,
+        workers_per_gpu=4
     ),
     test_dataloader=dict(
-        videos_per_gpu=1,
-        workers_per_gpu=1
+        videos_per_gpu=8,
+        workers_per_gpu=4
     ),
     train=dict(
         type=dataset_type,
