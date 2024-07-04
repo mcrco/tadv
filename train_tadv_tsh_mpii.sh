@@ -40,5 +40,6 @@ python $SCRIPT $CONFIG \
     data_root_val=$DATA_ROOT_VAL \
     data.test.data_prefix=$DATA_ROOT_VAL \
     ann_file_test=$TEST_FILE \
+    data.val.ann_file=$TEST_FILE \
     data.test.ann_file=$TEST_FILE \
 	work_dir=$WORK_DIR \
