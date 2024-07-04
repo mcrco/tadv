@@ -30,6 +30,7 @@ export PYTHONPATH="$(dirname $SCRIPT)/..":$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=$3
 
 python $SCRIPT $CONFIG \
+    --validate \
     --cfg-options data.videos_per_gpu=10 \
     data_root=$DATA_ROOT \
     data.train.data_prefix=$DATA_ROOT \
