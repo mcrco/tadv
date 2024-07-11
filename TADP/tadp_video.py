@@ -290,13 +290,18 @@ class TADPVid(pl.LightningModule):
     def forward(self, x, img_metas=None):
         if x.type() != torch.cuda.FloatTensor:
             x = x.float()
-        tensor_to_video(x[0], fps=4)
+
+        # log first video fo batch
+        # tensor_to_video(x[0], fps=4)
+
+        # print('input shape', x.shape)
         captions = None
         if self.blip_captions is not None and img_metas is not None:
             captions = [self.blip_captions[name] for name in img_metas]
         video_features = []
         for i in range(len(x)):
             video = x[i]
+            # print('video shape', video.shape)
             frame_captions = [captions[i] for _ in range(video.shape[0])] if captions is not None else None
             features = self.extract_feat(video, captions=frame_captions)
             video_features.append(features[0]) 

@@ -17,7 +17,7 @@ cfg["stable_diffusion"] = {
         'num_val_inference_steps': 30,
         'model': 'runwayml/stable-diffusion-v1-5'
 }
-cfg["max_epochs"] = 50
+cfg["max_epochs"] = 20
 
 model_kwargs = {}
 model_kwargs['unet_config'] = {'use_attn': True}  # default for use_attn ends up true
@@ -41,7 +41,7 @@ model = dict(
         class_names = class_names
     ),
     cls_head=dict(
-        type='LinearHead',
+        type='NeeharHeadMM',
         num_classes=6,
         in_channels=320),
     # model training and testing settings
@@ -58,12 +58,9 @@ ann_file_train = ''
 data_root_val = ''
 ann_file_test = ''
 
-img_norm_cfg = dict(
-    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_bgr=False)
 train_pipeline = [
     dict(type='SampleFrames', clip_len=8, frame_interval=8, num_clips=1),
     dict(type='RawFrameDecode'),
-    dict(type='Resize', scale=(-1, 256)),
     # dict(
     #     type='MultiScaleCrop',
     #     input_size=224,
@@ -72,7 +69,6 @@ train_pipeline = [
     #     max_wh_scale_gap=0),
     dict(type='Resize', scale=(512, 512), keep_ratio=False),
     dict(type='Flip', flip_ratio=0.5),
-    # dict(type='Normalize', **img_norm_cfg),
     dict(type='FormatShape', input_format='NTCHW'),
     dict(type='Collect', keys=['imgs', 'label'], meta_keys=[]),
     dict(type='ToTensor', keys=['imgs', 'label'])
@@ -82,13 +78,11 @@ val_pipeline = [
         type='SampleFrames',
         clip_len=8,
         frame_interval=8,
-        num_clips=10,
+        num_clips=1,
         test_mode=True),
     dict(type='RawFrameDecode'),
-    dict(type='Resize', scale=(-1, 256)),
-    dict(type='ThreeCrop', crop_size=256),
+    dict(type='Resize', scale=(512, 512), keep_ratio=False),
     dict(type='Flip', flip_ratio=0),
-    # dict(type='Normalize', **img_norm_cfg),
     dict(type='FormatShape', input_format='NTCHW'),
     dict(type='Collect', keys=['imgs', 'label'], meta_keys=[]),
     dict(type='ToTensor', keys=['imgs'])
@@ -101,10 +95,8 @@ test_pipeline = [
         num_clips=10,
         test_mode=True),
     dict(type='RawFrameDecode'),
-    dict(type='Resize', scale=(-1, 256)),
-    dict(type='ThreeCrop', crop_size=256),
+    dict(type='Resize', scale=(512, 512), keep_ratio=False),
     dict(type='Flip', flip_ratio=0),
-    # dict(type='Normalize', **img_norm_cfg),
     dict(type='FormatShape', input_format='NTCHW'),
     dict(type='Collect', keys=['imgs', 'label'], meta_keys=[]),
     dict(type='ToTensor', keys=['imgs'])
@@ -117,8 +109,8 @@ data = dict(
         workers_per_gpu=4
     ),
     test_dataloader=dict(
-        videos_per_gpu=8,
-        workers_per_gpu=4
+        videos_per_gpu=1,
+        workers_per_gpu=1
     ),
     train=dict(
         type=dataset_type,
@@ -133,7 +125,7 @@ data = dict(
         filename_tmpl='{:05d}.jpg',
         start_index=0,
         data_prefix=data_root_val,
-        pipeline=test_pipeline),
+        pipeline=val_pipeline),
     test=dict(
         type=dataset_type,
         ann_file=ann_file_test,
@@ -160,9 +152,15 @@ lr_config = dict(
     warmup_by_epoch=True,
     warmup_iters=10)
     
-total_epochs = 50
+total_epochs = 20
 
 # runtime settings
 work_dir = './work_dirs/tadv/mpii_tsh_8frame/'
-log_config = dict(interval=50)
+log_config = dict(
+    interval=40,
+    hooks=[
+        dict(type='TextLoggerHook'),
+        dict(type='WandbHook', name='mpii-tsh')
+        # dict(type='TensorboardLoggerHook'),
+    ])
 checkpoint_config = dict(interval=5)
