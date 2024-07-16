@@ -5,7 +5,7 @@ default_runtime_path = config_root_dir + '_base_/default_runtime.py'
 wandb_runtime_path = config_root_dir + '_base_/wandb_runtime.py'
 
 _base_ = [
-        tadv_path, wandb_runtime_path
+        tadv_path, default_runtime_path
 ]
 
 cfg = {}
@@ -17,12 +17,12 @@ cfg["stable_diffusion"] = {
         'num_val_inference_steps': 30,
         'model': 'runwayml/stable-diffusion-v1-5'
 }
-cfg["max_epochs"] = 20
+cfg["max_epochs"] = 50
 
 model_kwargs = {}
 model_kwargs['unet_config'] = {'use_attn': True}  # default for use_attn ends up true
 cfg['text_conditioning'] = 'blip'
-cfg['blip_caption_path'] = 'captions/hmdb51_captions.json'
+cfg['blip_caption_path'] = 'captions/mpii_tsh_captions.json'
 cfg['use_scaled_encode'] = False
 
 cfg['dreambooth_checkpoint'] = None
@@ -34,23 +34,23 @@ class_names = ['stir', 'wash objects', 'cut', 'eat(drink)', 'pour', 'clean']
 
 # model settings
 model = dict(
-    type='Recognizer3D',
+    type='Recognizer3DMeta',
     backbone=dict(
         type='TADPVidMM',
         cfg=cfg,
         class_names = class_names
     ),
     cls_head=dict(
-        type='NeeharHeadMM',
+        type='RogerioHeadMM',
         num_classes=6,
         in_channels=320),
     # model training and testing settings
-    train_cfg=None,
+    train_cfg=dict(aux_info=['video_name']),
     test_cfg=dict(average_clips='prob'))
 
 
 # dataset settings
-dataset_type = 'RawframeDataset'
+dataset_type = 'RawframeWithMetaDataset'
 
 # should be defined by training script
 data_root = ''
@@ -152,7 +152,7 @@ lr_config = dict(
     warmup_by_epoch=True,
     warmup_iters=10)
     
-total_epochs = 20
+total_epochs = 50
 
 # runtime settings
 work_dir = './work_dirs/tadv/mpii_tsh_8frame/'
@@ -160,7 +160,7 @@ log_config = dict(
     interval=40,
     hooks=[
         dict(type='TextLoggerHook'),
-        dict(type='WandbHook', name='mpii-tsh')
+        # dict(type='WandbHook', name='mpii-tsh')
         # dict(type='TensorboardLoggerHook'),
     ])
 checkpoint_config = dict(interval=5)

@@ -24,19 +24,7 @@ from torchvision import datapoints
 from ldm.util import instantiate_from_config
 
 from TADP.vpd.models import UNetWrapper, TextAdapter
-
-class BasicDecoder(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.mean = lambda x : torch.mean(x, 1) # first dim is video, second dim is frames
-        self.flatten = nn.Flatten()
-        self.cls_head = nn.Linear(320 * 64 * 64, 51) # 51 classes in HMDB
-
-    def forward(self, x):
-        x = self.mean(x)
-        x = self.flatten(x)
-        x = self.cls_head(x)
-        return x
+from TADP.tadv_heads import LinearHead, NeeharHead, RogerioHead
 
 class TADPVid(pl.LightningModule):
 
@@ -171,7 +159,12 @@ class TADPVid(pl.LightningModule):
 
         self.use_decode_head = use_decode_head
         if use_decode_head:
-            self.decode_head = BasicDecoder()
+            if self.cfg['cls_head'] == 'neehar':
+                self.decode_head = NeeharHead(num_classes=51)
+            if self.cfg['cls_head'] == 'linear':
+                self.decode_head = LinearHead(num_classes=51, in_channels=320*64*64)
+            if self.cfg['cls_head'] == 'rogerio':
+                self.decode_head = RogerioHead(num_classes=51)
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
@@ -288,7 +281,7 @@ class TADPVid(pl.LightningModule):
         return outs
 
     def forward(self, x, img_metas=None):
-        if x.type() != torch.cuda.FloatTensor:
+        if isinstance(x, torch.Tensor) and x.type() != torch.cuda.FloatTensor:
             x = x.float()
 
         # log first video fo batch
@@ -401,6 +394,17 @@ class TADPVid(pl.LightningModule):
     def load_weights(self, path, strict=True):
         # TODO diff be
         self.load_state_dict(torch.load(path)['state_dict'], strict=True)
+        
+    def test_step(self, batch, batch_idx, dataloader_idx=0):
+        x, y, metas = batch
+        preds = self(x, img_metas=metas)
+        loss = self.metric(preds, y)
+        accuracy = self.accuracy(preds, y)
+        self.log_dict({
+            'test_loss': loss, 
+            'test_acc': accuracy
+        }, sync_dist=True)
+
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         x, y, metas = batch
@@ -413,24 +417,24 @@ class TADPVid(pl.LightningModule):
         }, sync_dist=True)
 
         # log video and attention maps for first batch in each validation step
-        if batch_idx == 0:
-            # log first video
-            video = x[0]
-            frames = video.cpu().numpy()
-            
-            # log diffusion cross attention maps from middle (4th) frame of first video
-            caption = None
-            if self.blip_captions is not None:
-                caption = self.blip_captions[metas[0]]
-            frame_captions = [caption for _ in range(video.shape[0])] if caption is not None else None
-            features = self.extract_feat(video, captions=frame_captions)
-            ca_maps = features[0].cpu().numpy()[3] # 4th frame of first video
-            np.reshape(ca_maps, (*ca_maps.shape, 1))
+        # if batch_idx == 0:
+        #     # log first video
+        #     video = x[0]
+        #     frames = video.cpu().numpy()
+        #     
+        #     # log diffusion cross attention maps from middle (4th) frame of first video
+        #     caption = None
+        #     if self.blip_captions is not None:
+        #         caption = self.blip_captions[metas[0]]
+        #     frame_captions = [caption for _ in range(video.shape[0])] if caption is not None else None
+        #     features = self.extract_feat(video, captions=frame_captions)
+        #     ca_maps = features[0].cpu().numpy()[3] # 4th frame of first video
+        #     np.reshape(ca_maps, (*ca_maps.shape, 1))
 
-            self.logger.experiment.log({
-                'video': wandb.Video(frames, caption=metas[0]),
-                'cross_att_maps': [wandb.Image(ca_map, caption=self.blip_captions[metas[0]]) for ca_map in ca_maps]
-            })
+        #     self.logger.experiment.log({
+        #         'video': wandb.Video(frames, caption=metas[0]),
+        #         'cross_att_maps': [wandb.Image(ca_map, caption=self.blip_captions[metas[0]]) for ca_map in ca_maps]
+        #     })
 
 def tensor_to_video(tensor, output_file='out/output_video.avi', fps=30):
     frames = tensor.cpu().numpy()  # Convert PyTorch tensor to numpy array

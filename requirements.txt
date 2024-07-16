@@ -1,6 +1,8 @@
 numpy
 scipy
 torchvision
+pytorchvideo
+requests
 lightning
 segmentation-models-pytorch
 matplotlib
@@ -20,7 +22,6 @@ pandas
 scikit-image
 scikit-learn
 pytest
-torchvision
 ftfy
 tensorboard
 Jinja2
@@ -29,3 +30,4 @@ clip
 gdown
 -e git+https://github.com/facebookresearch/detectron2.git
 openai
+openai-clip

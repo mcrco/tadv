@@ -6,9 +6,7 @@ from torch import Tensor
 from torchvision.datasets import HMDB51
 from torchvision.ops.boxes import torchvision
 from typing import Tuple
-import pytorchvideo.transforms as VT
 import lightning.pytorch as pl
-import wandb
 import yaml
 from torch.utils.data import DataLoader
 
@@ -28,6 +26,65 @@ class HMDB51WithMetadata(HMDB51):
             video = self.transform(video)
 
         return video, audio, class_index, video_name
+
+class HMDB51DataModule(pl.LightningDataModule):
+    def __init__(self, video_path, split_file_path, num_frames, step, format, batch_size, num_workers):
+        super().__init__()
+        self.video_path = video_path
+        self.split_file_path = split_file_path
+        self.num_frames = num_frames
+        self.step = step
+        self.format = format
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
+        frame_transform = torchvision.transforms.Resize((512, 512))
+        def resize_transform(video):
+            trans_frames = []
+            for frame in video:
+                trans_frames.append(frame_transform(frame))
+            return torch.stack(trans_frames)
+
+        self.train = HMDB51WithMetadata(self.video_path, 
+            self.split_file_path,
+            frames_per_clip=self.num_frames,
+            step_between_clips=self.step,
+            output_format=self.format,
+            transform=resize_transform,
+            train=True
+        )
+        self.val = HMDB51WithMetadata(self.video_path, 
+            self.split_file_path,
+            frames_per_clip=self.num_frames,
+            step_between_clips=self.step,
+            output_format=self.format,
+            transform=resize_transform,
+            train=False
+        )
+        self.test = HMDB51WithMetadata(self.video_path, 
+            self.split_file_path,
+            frames_per_clip=self.num_frames,
+            step_between_clips=self.step,
+            output_format=self.format,
+            transform=resize_transform,
+            train=False
+        )
+
+        def collate_function(data):
+            videos = [vid[0].to(dtype=torch.float32) for vid in data]
+            video_names = [vid[3] for vid in data]
+            labels = torch.tensor([vid[2] for vid in data], dtype=torch.long)
+            return videos, labels, video_names
+        self.collate_function = collate_function
+
+    def train_dataloader(self):
+        return DataLoader(self.train, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, collate_fn=self.collate_function)
+
+    def val_dataloader(self):
+        return DataLoader(self.val, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, collate_fn=self.collate_function)
+
+    def test_dataloader(self):
+        return DataLoader(self.test, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, collate_fn=self.collate_function)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -89,9 +146,10 @@ def main():
     parser.add_argument('--no_attn', action='store_true', default=False)
     parser.add_argument('--use_only_attn', action='store_true', default=False)
     parser.add_argument('--present_class_embeds_only', action='store_true', default=False)
+    parser.add_argument('--cls_head', type=str, default='neehar')
 
     parser.add_argument('--trainer_ckpt_path', type=str, default=None)
-    parser.add_argument('--save_checkpoint_path', type=str, default='')
+    parser.add_argument('--save_checkpoint_path', type=str, default='out/')
     parser.add_argument('--train_debug', action='store_true', default=False)
     args = parser.parse_args()
 
@@ -123,7 +181,7 @@ def main():
         max_epochs = 4
         os.environ["WANDB_MODE"] = "dryrun"
         num_workers = 0
-        batch_size = 16 if 'TADP' not in args.model else batch_size
+        batch_size = batch_size
         log_freq = 1
         save_last = False
         save_topk = 0
@@ -148,48 +206,25 @@ def main():
     pl.seed_everything(args.seed)
     torch.set_float32_matmul_precision('high')
 
-    frame_transform = torchvision.transforms.Resize((512, 512))
-    def resize_transform(video):
-        trans_frames = []
-        for frame in video:
-            trans_frames.append(frame_transform(frame))
-        return torch.stack(trans_frames)
-
+    # set up datamodule
     base_path = './data/'
-    train = HMDB51WithMetadata(os.path.join(base_path, 'hmdb51/videos'), 
-                   os.path.join(base_path, 'hmdb51/split_files'),
-                   frames_per_clip=8,
-                   step_between_clips=1000000000,
-                   output_format="TCHW",
-                   transform=resize_transform,
-                   train=True
-                   )
-                   
-    test = HMDB51WithMetadata(os.path.join(base_path, 'hmdb51/videos'), 
-                  os.path.join(base_path, 'hmdb51/split_files'),
-                  frames_per_clip=8,
-                  step_between_clips=100000000,
-                  output_format="TCHW",
-                  transform=resize_transform,
-                  train=False
-                  )
-
-    def collate_function(data):
-        videos = [vid[0].to(dtype=torch.float32) for vid in data]
-        video_names = [vid[3] for vid in data]
-        labels = torch.tensor([vid[2] for vid in data], dtype=torch.long)
-        return videos, labels, video_names
-
-    train_loader = DataLoader(train, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate_function)
-    test_loader = DataLoader(test, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate_function)
-
-    # for tdi, td in enumerate(train_datasets):
-    #     print(f'Train dataset {args.train_dataset[tdi]}: {len(td)} samples')
+    dataset_name = 'hmdb51'
+    if args.debug:
+        dataset_name = 'hmdb-small'
+    datamodule = HMDB51DataModule(
+        os.path.join(base_path, f'{dataset_name}/videos'), 
+        os.path.join(base_path, f'{dataset_name}/split_files'),
+        num_frames=8,
+        step=10000000000,
+        format="TCHW",
+        batch_size=batch_size,
+        num_workers=num_workers
+    )
 
     cfg = yaml.load(open("./sd_tune.yaml", "r"), Loader=yaml.FullLoader)
     cfg["stable_diffusion"]["use_diffusion"] = True
     cfg["max_epochs"] = max_epochs
-    cfg["dataset_len"] = len(train_loader)
+    cfg["dataset_len"] = len(datamodule.train_dataloader())
     cfg["freeze_text_adapter"] = freeze_text_adapter
 
     if args.no_attn and args.use_only_attn:
@@ -199,7 +234,7 @@ def main():
     cfg['text_conditioning'] = args.text_conditioning
     cfg['blip_caption_path'] = blip_caption_path
     cfg['use_scaled_encode'] = args.use_scaled_encode
-    cfg['class_names'] = train.classes
+    cfg['class_names'] = datamodule.train.classes
     cfg['append_self_attention'] = args.append_self_attention
     cfg['use_text_adapter'] = args.use_text_adapter
     cfg['cond_stage_trainable'] = cond_stage_trainable
@@ -216,24 +251,31 @@ def main():
     cfg['textual_inversion_token_path'] = args.textual_inversion_token_path
     cfg['val_dataset_name'] = args.val_dataset_name
     cfg['cross_blip_caption_path'] = args.cross_blip_caption_path
+    cfg['cls_head'] = args.cls_head
 
-    model = TADPVid(cfg=cfg, class_names=train.classes)
+    model = TADPVid(cfg=cfg, class_names=datamodule.train.classes)
+
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(
+        dirpath=f'./checkpoints/{args.exp_name}/',
+        filename='model_checkpoint_{epoch}',
+        # save_top_k=save_topk,  # Save top1 Why?? this is 40GB of checkpoints -->> # Save all checkpoints.
+        save_top_k=save_topk,
+        save_last=save_last,
+    )
 
     lr_callback = pl.callbacks.LearningRateMonitor(logging_interval='epoch')
-    callbacks = [lr_callback]
+    callbacks = [lr_callback, checkpoint_callback]
 
     logger = pl.loggers.WandbLogger(
         name=wandb_name or "segmentation_test, model={}".format(model_name) + "usingDecoderFeatures={}".format(
             use_decoder_features),
         group=wandb_group or "mcrco",
         project="tadvar",
-        log_model=True
+        log_model=True,
     )
 
     # watch model
     logger.watch(model, log="all", log_freq=log_freq)
-
-    print("batch_size: ", batch_size)
 
     trainer = pl.Trainer(
         accelerator="gpu",
@@ -247,26 +289,19 @@ def main():
         limit_val_batches=limit_val_batches,  # None unless --wandb_debug or --val_debug flag is set
         check_val_every_n_epoch=args.check_val_every_n_epoch,  # None unless --wandb_debug flag is set
         sync_batchnorm=True if args.num_gpus > 1 else False,
-        accumulate_grad_batches=accum_grad_batches,
+        accumulate_grad_batches=accum_grad_batches
     )
     if trainer.global_rank == 0:
         logger.experiment.config.update(args)
 
-    trainer.fit(
-        model,
-        train_dataloaders=train_loader,
-        val_dataloaders=test_loader,
-        ckpt_path=args.trainer_ckpt_path,
-    )
-    # save the model
+    trainer.fit(model, datamodule, ckpt_path=args.trainer_ckpt_path)
+
+    save_model_name = f'{args.exp_name}.ckpt'
     if save_checkpoint_path != '':
-        save_model_name = f'{args.exp_name}.ckpt'
-        # results paths
         if not os.path.exists(save_checkpoint_path):
             os.makedirs(save_checkpoint_path)
-        torch.save(model.state_dict(), save_checkpoint_path + save_model_name)
-
-    trainer.test(ckpt_path='last')
+        trainer.save_checkpoint(os.path.join(save_checkpoint_path, save_model_name))
+    trainer.test(model, ckpt_path=os.path.join(save_checkpoint_path, save_model_name))
 
 if __name__ == "__main__":
     main()
