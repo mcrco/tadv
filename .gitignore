@@ -10,3 +10,4 @@ __pycache__/
 tokens
 captioning/gpt_cfg.yaml
 out
+*.ckpt
