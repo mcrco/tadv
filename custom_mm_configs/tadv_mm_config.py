@@ -19,6 +19,8 @@ cfg["stable_diffusion"] = {
 }
 cfg["max_epochs"] = 50
 
+cfg["diffusion_batch_videos"] = 1
+
 model_kwargs = {}
 model_kwargs['unet_config'] = {'use_attn': True}  # default for use_attn ends up true
 cfg['text_conditioning'] = 'blip'

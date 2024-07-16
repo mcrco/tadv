@@ -33,7 +33,7 @@ export CUDA_VISIBLE_DEVICES=$3
 python $SCRIPT $CONFIG \
     --validate \
     --test-last \
-    --cfg-options data.videos_per_gpu=10 \
+    --cfg-options \
     data.train.data_prefix=$DATA_ROOT \
     data.train.ann_file=$TRAIN_FILE \
     data.val.data_prefix=$DATA_ROOT_VAL \

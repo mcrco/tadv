@@ -281,24 +281,35 @@ class TADPVid(pl.LightningModule):
         return outs
 
     def forward(self, x, img_metas=None):
+        if not isinstance(x, torch.Tensor):
+            x = torch.FloatTensor(x)
         if isinstance(x, torch.Tensor) and x.type() != torch.cuda.FloatTensor:
             x = x.float()
 
         # log first video fo batch
         # tensor_to_video(x[0], fps=4)
 
-        # print('input shape', x.shape)
-        captions = None
+        all_captions = None
         if self.blip_captions is not None and img_metas is not None:
             captions = [self.blip_captions[name] for name in img_metas]
-        video_features = []
-        for i in range(len(x)):
-            video = x[i]
-            # print('video shape', video.shape)
-            frame_captions = [captions[i] for _ in range(video.shape[0])] if captions is not None else None
-            features = self.extract_feat(video, captions=frame_captions)
-            video_features.append(features[0]) 
-        features = torch.stack(video_features)
+            all_captions = [[caption for _ in range(x.shape[1])] for caption in captions]
+
+        vids_per_batch = self.cfg["diffusion_batch_videos"]
+        sub_batches = torch.split(x, vids_per_batch)
+        all_features = []
+        for i in range(len(sub_batches)):
+            batch = sub_batches[i]
+            caption_batch = None
+            if all_captions is not None:
+                caption_batch = []
+                for j in range(i * vids_per_batch, i * vids_per_batch + vids_per_batch):
+                    caption_batch.extend(all_captions[j])
+            n_batch, n_frames, channels, height, width = batch.shape
+            batch = batch.reshape(n_batch * n_frames, channels, height, width)
+            features = self.extract_feat(batch, captions=caption_batch)[0]
+            features = features.reshape(n_batch, n_frames, *features.shape[1:])
+            all_features.append(features)
+        features = torch.cat(all_features)
 
         if not self.use_decode_head:
             return features

@@ -158,7 +158,7 @@ class RogerioHead(nn.Module):
         )
 
         # flatten into (n_batch * n_frames) x 4096
-        self.flatten = nn.Flatten(-2, -1)
+        self.flatten = nn.Flatten(-3, -1)
 
         # linear embedding to feed into transformer
         self.embed = nn.Linear(4096, 512)
@@ -190,9 +190,9 @@ class RogerioHead(nn.Module):
         # (n_batch * n_frames, 64, 8, 8) -> (nbatch * n_frames, 4096)
         x = self.flatten(x)
         # (n_batch * n_frames, 4096) -> (nbatch * n_frames, 512)
-        x = x.reshape(n_batch, n_frames, 64, 8, 8)
-        # (n_batch * n_frames, 512) -> (nbatch, n_frames, 512)
         x = self.embed(x)
+        # (n_batch * n_frames, 4096) -> (nbatch, n_frames, 512)
+        x = x.reshape(n_batch, n_frames, 512)
         # (n_batch, n_frames, 512) -> (nbatch, num_classes)
         x = self.classifier(x)
         return x
