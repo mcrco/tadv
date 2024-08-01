@@ -200,7 +200,7 @@ def main():
     parser.add_argument('--strategy', type=str, default='')
     parser.add_argument('--ckpt_path', type=str, default='')
     parser.add_argument("--accum_grad_batches", type=int, default=1)
-    parser.add_argument('--normalize_videos', action='store_true', default=False)
+    parser.add_argument('--normalize_videos', action='store_true', default=True)
     parser.add_argument('--trainer_ckpt_path', type=str, default=None)
     parser.add_argument('--save_checkpoint_path', type=str, default='out/')
     parser.add_argument('--train_debug', action='store_true', default=False)
