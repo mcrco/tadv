@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from torchmetrics import Accuracy
 import torchvision
+import torchvision.transforms as T
 import torchvision.transforms.v2.functional
 import wandb
 # our stuff
@@ -20,11 +21,12 @@ from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from omegaconf import OmegaConf
 from torch import nn
+import torch.nn.functional as F
 from torchvision import datapoints
 from ldm.util import instantiate_from_config
 
 from TADP.vpd.models import UNetWrapper, TextAdapter
-from TADP.tadv_heads import LinearHead, NeeharHead, RogerioHead
+from TADP.tadv_heads import LinearHead, MLPHead, NeeharHead, RogerioHead
 
 class TADPVid(pl.LightningModule):
 
@@ -39,6 +41,7 @@ class TADPVid(pl.LightningModule):
                  cfg=None,
                  class_names=None,
                  freeze_backbone=False,
+                 log_ca=False,
                  *args,
                  **kwargs,
                  ):
@@ -46,9 +49,11 @@ class TADPVid(pl.LightningModule):
         # get config from *args and **kwargs
 
         self.freeze_backbone = freeze_backbone
+        self.log_ca = log_ca
 
         if class_names is not None:
             self.n_classes = len(class_names)
+        self.class_names = class_names
         self.metric = nn.CrossEntropyLoss()
         self.accuracy = Accuracy(task='multiclass', num_classes=51, top_k=1)
         self.dataset_name = "voc"
@@ -164,15 +169,18 @@ class TADPVid(pl.LightningModule):
             if self.cfg['cls_head'] == 'linear':
                 self.decode_head = LinearHead(num_classes=51, in_channels=320*64*64)
             if self.cfg['cls_head'] == 'rogerio':
-                self.decode_head = RogerioHead(num_classes=51)
+                self.decode_head = RogerioHead(num_classes=51, in_channels=320)
+            if self.cfg['cls_head'] == 'mlp':
+                self.decode_head = MLPHead(num_classes=51, in_channels=320)
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         # assert self.with_decode_head
 
         ## test for now fix the unet
-        for param in self.model.parameters():
-            param.requires_grad = False
+        if self.freeze_backbone:
+            for param in self.model.parameters():
+                param.requires_grad = False
 
         textual_inversion_token_path = self.cfg['textual_inversion_token_path']
         if textual_inversion_token_path is not None:
@@ -281,35 +289,36 @@ class TADPVid(pl.LightningModule):
         return outs
 
     def forward(self, x, img_metas=None):
-        if not isinstance(x, torch.Tensor):
-            x = torch.FloatTensor(x)
-        if isinstance(x, torch.Tensor) and x.type() != torch.cuda.FloatTensor:
-            x = x.float()
-
-        # log first video fo batch
+        if type(x) is list:
+            x = torch.stack(x)
+        # log first video of batch
         # tensor_to_video(x[0], fps=4)
 
-        all_captions = None
+        captions = None
         if self.blip_captions is not None and img_metas is not None:
             captions = [self.blip_captions[name] for name in img_metas]
-            all_captions = [[caption for _ in range(x.shape[1])] for caption in captions]
 
-        vids_per_batch = self.cfg["diffusion_batch_videos"]
-        sub_batches = torch.split(x, vids_per_batch)
         all_features = []
-        for i in range(len(sub_batches)):
-            batch = sub_batches[i]
+
+        # concat together subbatches of videos to form larger batches of images to extract
+        frames_per_batch = self.cfg["diffusion_batch_size"]
+        n_batch, n_frames, channels, height, width = x.shape
+        x = x.reshape(n_batch * n_frames, channels, height, width)
+        img_batches = torch.split(x, frames_per_batch)
+        all_captions = None
+        if captions is not None:
+            all_captions = []
+            for c in captions:
+                all_captions.extend([c for _ in range(n_frames)])
+        for i in range(len(img_batches)):
+            img_batch = img_batches[i]
             caption_batch = None
             if all_captions is not None:
-                caption_batch = []
-                for j in range(i * vids_per_batch, i * vids_per_batch + vids_per_batch):
-                    caption_batch.extend(all_captions[j])
-            n_batch, n_frames, channels, height, width = batch.shape
-            batch = batch.reshape(n_batch * n_frames, channels, height, width)
-            features = self.extract_feat(batch, captions=caption_batch)[0]
-            features = features.reshape(n_batch, n_frames, *features.shape[1:])
+                caption_batch = all_captions[i * frames_per_batch:min(i * frames_per_batch + frames_per_batch, len(all_captions))]
+            features = self.extract_feat(img_batch, captions=caption_batch)[0]
             all_features.append(features)
         features = torch.cat(all_features)
+        features = features.reshape(n_batch, n_frames, *features.shape[1:])
 
         if not self.use_decode_head:
             return features
@@ -347,47 +356,46 @@ class TADPVid(pl.LightningModule):
 
     def configure_optimizers(self):
         # TODO: double check here
-        # optimizer = torch.optim.Adam(self.model.parameters(), lr=0.0001)
+        optimizer = torch.optim.Adam(self.decode_head.parameters(), lr=0.001)
         # have differernt learning rate for different layers
         # parameters to optimize
-        lesslr_no_decay = list()
-        lesslr_decay = list()
-        no_lr = list()
-        no_decay = list()
-        decay = list()
-        for name, m in self.named_parameters():
-            if 'unet' in name and 'norm' in name:
-                lesslr_no_decay.append(m)
-            elif 'unet' in name:
-                lesslr_decay.append(m)
-            elif 'encoder_vq' in name:
-                no_lr.append(m)
-            elif 'norm' in name:
-                no_decay.append(m)
-            else:
-                decay.append(m)
+        # lesslr_no_decay = list()
+        # lesslr_decay = list()
+        # no_lr = list()
+        # no_decay = list()
+        # decay = list()
+        # for name, m in self.named_parameters():
+        #     if 'unet' in name and 'norm' in name:
+        #         lesslr_no_decay.append(m)
+        #     elif 'unet' in name:
+        #         lesslr_decay.append(m)
+        #     elif 'encoder_vq' in name:
+        #         no_lr.append(m)
+        #     elif 'norm' in name:
+        #         no_decay.append(m)
+        #     else:
+        #         decay.append(m)
 
-        if self.freeze_backbone:
-            params_to_optimize = [
-                {'params': lesslr_no_decay, 'weight_decay': 0.0, 'lr_scale': 0.0},
-                {'params': lesslr_decay, 'lr_scale': 0.0},
-                {'params': no_lr, 'lr_scale': 0.0},
-                {'params': no_decay, 'weight_decay': 0.0},
-            ]
-        else:
-            params_to_optimize = [
-                {'params': lesslr_no_decay, 'weight_decay': 0.0, 'lr_scale': 0.01},
-                {'params': lesslr_decay, 'lr_scale': 0.01},
-                {'params': no_lr, 'lr_scale': 0.0},
-                {'params': no_decay, 'weight_decay': 0.0},
-                {'params': decay}
-            ]
-        optimizer = torch.optim.AdamW(params_to_optimize,
-                                      lr=0.00001,
-                                      # lr=0.000005,
-                                      weight_decay=1e-2,
-                                      amsgrad=False
-                                      )
+        # if self.freeze_backbone:
+        #     params_to_optimize = [
+        #         {'params': lesslr_no_decay, 'weight_decay': 0.0, 'lr_scale': 0.0},
+        #         {'params': lesslr_decay, 'lr_scale': 0.0},
+        #         {'params': no_lr, 'lr_scale': 0.0},
+        #         {'params': no_decay, 'weight_decay': 0.0},
+        #     ]
+        # else:
+        #     params_to_optimize = [
+        #         {'params': lesslr_no_decay, 'weight_decay': 0.0, 'lr_scale': 0.01},
+        #         {'params': lesslr_decay, 'lr_scale': 0.01},
+        #         {'params': no_lr, 'lr_scale': 0.0},
+        #         {'params': no_decay, 'weight_decay': 0.0},
+        #         {'params': decay}
+        #     ]
+        # optimizer = torch.optim.AdamW(params_to_optimize,
+        #                               lr=1e-4,
+        #                               weight_decay=1e-2,
+        #                               amsgrad=False
+        #                               )
 
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: (1 - x / (
                 self.cfg["dataset_len"] * self.cfg["max_epochs"])) ** 0.9)
@@ -396,8 +404,30 @@ class TADPVid(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x, y, metas = batch
-        preds = self(x, img_metas=metas)
-        return self.metric(preds, y)
+        outputs = self(x, img_metas=metas)
+
+        probs = F.softmax(outputs, 1).detach().cpu().numpy()
+        preds = torch.argmax(outputs, 1).detach().cpu().numpy() 
+        print('predictions:', [self.class_names[pred] for pred in preds])
+        print('probabilities of preds:', [probs[i][c] for i,c in enumerate(preds)])
+        print('truth:', [self.class_names[truth] for truth in y.detach().cpu().numpy()])
+        if self.decode_head.conv_down[0].weight.grad is not None:
+            print('conv 0 grad', self.decode_head.conv_down[0].weight.grad.abs().max())
+        # print(preds, [probs[i] for i in preds], y)
+        # print('conv 0 weight', self.decode_head.conv_down[0].weight[0][0])
+        # print('conv grad 2', self.decode_head.conv_down[2].weight.grad)
+        # print('embed grad', self.decode_head.embed.weight.grad)
+        # print('classifier fc grad', self.decode_head.mlp[0].weight.grad)
+        # for name, param in self.decode_head.named_parameters():
+        #     print(name, param.requires_grad)
+
+        loss = self.metric(outputs, y)
+        accuracy = self.accuracy(outputs, y)
+        self.log_dict({
+            'train_loss': loss, 
+            'train_acc': accuracy
+        }, sync_dist=True)
+        return loss
 
     def save_weights(self, path):
         torch.save(self.state_dict(), path)
@@ -427,25 +457,27 @@ class TADPVid(pl.LightningModule):
             'val_acc': accuracy
         }, sync_dist=True)
 
-        # log video and attention maps for first batch in each validation step
-        # if batch_idx == 0:
-        #     # log first video
-        #     video = x[0]
-        #     frames = video.cpu().numpy()
-        #     
-        #     # log diffusion cross attention maps from middle (4th) frame of first video
-        #     caption = None
-        #     if self.blip_captions is not None:
-        #         caption = self.blip_captions[metas[0]]
-        #     frame_captions = [caption for _ in range(video.shape[0])] if caption is not None else None
-        #     features = self.extract_feat(video, captions=frame_captions)
-        #     ca_maps = features[0].cpu().numpy()[3] # 4th frame of first video
-        #     np.reshape(ca_maps, (*ca_maps.shape, 1))
+        # log video and attention maps every 10 batches in each validation loop
+        if batch_idx % 10 == 0:
+            video, label = x[0], y[0]
+            # if type(video) is list:
+            #     video = torch.stack(video)
+            frames = video.cpu().numpy()
+            
+            # log diffusion cross attention maps from middle (4th) frame of each video
+            caption = None
+            if self.blip_captions is not None:
+                caption = self.blip_captions[metas[0]]
+            frame_captions = [caption for _ in range(video.shape[0])] if caption is not None else None
+            features = self.extract_feat(video, captions=frame_captions)
+            ca_maps = features[0].cpu().numpy()[3] # 4th frame of video
+            np.reshape(ca_maps, (*ca_maps.shape, 1))
 
-        #     self.logger.experiment.log({
-        #         'video': wandb.Video(frames, caption=metas[0]),
-        #         'cross_att_maps': [wandb.Image(ca_map, caption=self.blip_captions[metas[0]]) for ca_map in ca_maps]
-        #     })
+            if self.log_ca:
+                self.logger.experiment.log({
+                    'video': wandb.Video(frames, caption=self.class_names[label]),
+                    'cross_att_maps': [wandb.Image(ca_map, caption=self.blip_captions[metas[0]]) for ca_map in ca_maps[:16]]
+                })
 
 def tensor_to_video(tensor, output_file='out/output_video.avi', fps=30):
     frames = tensor.cpu().numpy()  # Convert PyTorch tensor to numpy array

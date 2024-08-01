@@ -4,15 +4,6 @@ import torch.nn.functional as F
 import math
 
 class LinearHead(nn.Module):
-    """Classification head for tadv testing.
-
-    Args:
-        num_classes (int): Number of classes to be classified.
-        in_channels (int): Number of channels in input feature.
-        loss_cls (dict): Config for building loss.
-            Default: dict(type='CrossEntropyLoss')
-    """
-
     def __init__(self,
                  num_classes,
                  in_channels):
@@ -63,6 +54,7 @@ class TransformerClassifier(nn.Module):
                 )
 
         self.fc1 = nn.Linear(num_frames * embed_dim, embed_dim)
+        self.relu = nn.ReLU()
         self.fc2 = nn.Linear(embed_dim, num_classes)
 
         # param_count = 0
@@ -74,20 +66,12 @@ class TransformerClassifier(nn.Module):
         x = self.pos_encoding(x)
         x = self.transformer_encoder(x)
         x = x.reshape(x.shape[0], -1)
-        x = F.relu(self.fc1(x))
+        x = self.fc1(x)
+        x = self.relu(x)
         x = self.fc2(x)
         return x
 
 class NeeharHead(nn.Module):
-    """Classification head for tadv testing.
-
-    Args:
-        num_classes (int): Number of classes to be classified.
-        in_channels (int): Number of channels in input feature.
-        loss_cls (dict): Config for building loss.
-            Default: dict(type='CrossEntropyLoss')
-    """
-
     def __init__(self,
                  num_classes=6,
                  in_channels=320,
@@ -123,15 +107,6 @@ class NeeharHead(nn.Module):
         return x
 
 class RogerioHead(nn.Module):
-    """Classification head for tadv testing.
-
-    Args:
-        num_classes (int): Number of classes to be classified.
-        in_channels (int): Number of channels in input feature.
-        loss_cls (dict): Config for building loss.
-            Default: dict(type='CrossEntropyLoss')
-    """
-
     def __init__(self,
                  num_classes=6,
                  in_channels=320,
@@ -154,11 +129,10 @@ class RogerioHead(nn.Module):
             nn.Conv2d(in_channels=in_channels, out_channels=128, kernel_size=1),
             nn.ReLU(),
             nn.Conv2d(in_channels=128, out_channels=64, kernel_size=1),
-            nn.ReLU()
         )
 
         # flatten into (n_batch * n_frames) x 4096
-        self.flatten = nn.Flatten(-3, -1)
+        self.flatten = nn.Flatten()
 
         # linear embedding to feed into transformer
         self.embed = nn.Linear(4096, 512)
@@ -195,4 +169,71 @@ class RogerioHead(nn.Module):
         x = x.reshape(n_batch, n_frames, 512)
         # (n_batch, n_frames, 512) -> (nbatch, num_classes)
         x = self.classifier(x)
+        return x
+
+class MLPHead(nn.Module):
+    def __init__(self,
+                 num_classes=6,
+                 in_channels=320,
+                 embed_dim=512,
+                 hidden_dim=2048,
+                 num_frames=8,
+                 init_super=True):
+
+        if init_super:
+            super().__init__()
+
+        # interpolate maps down from 64 x 64 to 8 x 8 
+        self.interpolate = lambda x: F.interpolate(x, size=(8, 8), mode='bilinear', align_corners=False)
+
+        # reduce channels from 320 to 64
+        self.conv_down = nn.Sequential(
+            nn.Conv2d(in_channels=in_channels, out_channels=128, kernel_size=1),
+            nn.LeakyReLU(),
+            nn.Conv2d(in_channels=128, out_channels=64, kernel_size=1),
+        )
+
+        # flatten into (n_batch * n_frames) x 4096
+        self.flatten = nn.Flatten()
+
+        # linear embedding to feed into mlp
+        self.embed_dim = embed_dim
+        self.embed = nn.Linear(4096, embed_dim)
+
+        # mlp classifier
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim * num_frames, hidden_dim),
+            nn.LeakyReLU(),
+            nn.Linear(hidden_dim, num_classes),
+        )
+
+    def init_weights(self):
+        """Initiate the parameters from scratch."""
+        pass
+
+    def forward(self, x):
+        n_batch, n_frames, channels, height, width = x.shape
+
+        # (n_batch, n_frames, channels, height, width) -> (nbatch * n_frames, channels, height, width)
+        x = x.reshape(n_batch * n_frames, channels, height, width)
+
+        # (n_batch * n_frames, channels, height, width) -> (nbatch * n_frames, channels, 8, 8)
+        x = self.interpolate(x)
+
+        # (n_batch * n_frames, channels, 8, 8) -> (nbatch * n_frames, 64, 8, 8)
+        x = self.conv_down(x)
+
+        # (n_batch * n_frames, 64, 8, 8) -> (nbatch * n_frames, 4096)
+        x = self.flatten(x)
+
+        # (n_batch * n_frames, 4096) -> (nbatch * n_frames, 512)
+        x = self.embed(x)
+
+        # (n_batch * n_frames, 4096) -> (nbatch, n_frames * 512)
+        x = x.reshape(n_batch, n_frames, self.embed_dim)
+        x = x.reshape(n_batch, n_frames * self.embed_dim)
+
+        # (n_batch, n_frames * 512) -> (nbatch, num_classes)
+        x = self.mlp(x)
+
         return x

@@ -3,9 +3,10 @@ config_root_dir = proj_dir + 'BEAR/benchmark/BEAR-Standard/configs/'
 tadv_path = config_root_dir + '_base_/models/tadv.py'
 default_runtime_path = config_root_dir + '_base_/default_runtime.py'
 wandb_runtime_path = config_root_dir + '_base_/wandb_runtime.py'
+val_test_runtime = config_root_dir + '_base_/val_test_runtime.py'
 
 _base_ = [
-        tadv_path, default_runtime_path
+        tadv_path, wandb_runtime_path
 ]
 
 cfg = {}
@@ -45,7 +46,7 @@ model = dict(
     cls_head=dict(
         type='RogerioHeadMM',
         num_classes=6,
-        in_channels=320),
+        in_channels=717),
     # model training and testing settings
     train_cfg=dict(aux_info=['video_name']),
     test_cfg=dict(average_clips='prob'))
@@ -140,12 +141,10 @@ evaluation = dict(
 
 # optimizer
 optimizer = dict(
-    type='SGD',
-    #lr=0.01,  # this lr is used for 8 gpus
-    lr=0.01 / 8,  # for 1 gpu
-    momentum=0.9,
+    type='AdamW',
+    lr=0.001,
+    betas=(0.9, 0.999),
     weight_decay=0.0001)
-optimizer_config = dict(grad_clip=dict(max_norm=40, norm_type=2))
 # learning policy
 lr_config = dict(
     policy='step',
@@ -154,7 +153,7 @@ lr_config = dict(
     warmup_by_epoch=True,
     warmup_iters=10)
     
-total_epochs = 50
+total_epochs = 30
 
 # runtime settings
 work_dir = './work_dirs/tadv/mpii_tsh_8frame/'
@@ -162,7 +161,7 @@ log_config = dict(
     interval=40,
     hooks=[
         dict(type='TextLoggerHook'),
-        # dict(type='WandbHook', name='mpii-tsh')
+        dict(type='WandbHook', name='mpii-tsh_blip_convtrans')
         # dict(type='TensorboardLoggerHook'),
     ])
 checkpoint_config = dict(interval=5)

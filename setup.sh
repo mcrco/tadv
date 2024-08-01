@@ -1,10 +1,11 @@
 apt-get update && apt-get install ffmpeg libsm6 libxext6 unar vim htop unzip gcc curl g++ python3 python3-pip -y 
 
 # detectron2
-git clone https:// github.com/facebookresearch/detectron2.git
+git clone https://github.com/facebookresearch/detectron2.git
 mv detectron2 detectron2_repo
 cp -r detectron2_repo/detectron2/ ./
 rm -rf detectron2_repo
+pip install numpy
 pip install fvcore pycocotools cloudpickle chainercv
 
 pip install git+https://github.com/huggingface/diffusers.git@2764db3194fc1b5069df7292fd938657d8568995
