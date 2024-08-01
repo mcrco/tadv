@@ -104,7 +104,7 @@ class HMDB51DataModule(pl.LightningDataModule):
 
 # Define the PyTorch Lightning Module
 class ResNet50VideoClassifier(pl.LightningModule):
-    def __init__(self, num_classes, learning_rate=1e-3, pretrained=True):
+    def __init__(self, num_classes, num_frames, learning_rate=1e-3, pretrained=True):
         super().__init__()
 
         # Load the pretrained ResNet-50 model
@@ -115,9 +115,8 @@ class ResNet50VideoClassifier(pl.LightningModule):
 
         # Classification head
         self.classifier = nn.Sequential(
-            nn.Linear(2048, 512),
-            nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Linear(1000 * num_frames, 512),
+            nn.SiLU(),
             nn.Linear(512, num_classes)
         )
 
@@ -129,7 +128,13 @@ class ResNet50VideoClassifier(pl.LightningModule):
 
     def forward(self, x):
         # Extract features using ResNet-50
+        print(x.shape)
+        n, f, c, h, w = x.shape
+        x = x.view(n * f, c, h, w)
         features = self.resnet50(x)
+        print(features.shape)
+        features = features.view(n, f, features.shape[1:])
+        print(features.shape)
         # Classify using the classification head
         logits = self.classifier(features)
         return logits
@@ -192,7 +197,7 @@ def main():
     # experiment parameters
     parser.add_argument("--from_scratch", action='store_true', default=False)
     parser.add_argument("--max_epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint", type=str, default=None)
@@ -206,7 +211,6 @@ def main():
     parser.add_argument('--train_debug', action='store_true', default=False)
     args = parser.parse_args()
 
-    model_name = args.model_name
     pretrained = not args.from_scratch
     max_epochs = args.max_epochs
     batch_size = args.batch_size
@@ -217,7 +221,6 @@ def main():
     wandb_name = args.exp_name
     strategy = args.strategy
     accum_grad_batches = args.accum_grad_batches
-    use_decoder_features = args.use_decoder_features
     save_checkpoint_path = args.save_checkpoint_path
 
     save_topk = 1

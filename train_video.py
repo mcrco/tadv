@@ -165,7 +165,7 @@ def main():
     parser.add_argument('--present_class_embeds_only', action='store_true', default=False)
     parser.add_argument('--cls_head', type=str, default='neehar')
     parser.add_argument('--diffusion_batch_size', type=int, default=8)
-    parser.add_argument('--normalize_videos', action='store_true', default=False)
+    parser.add_argument('--normalize_videos', action='store_true', default=True)
 
     parser.add_argument('--trainer_ckpt_path', type=str, default=None)
     parser.add_argument('--save_checkpoint_path', type=str, default='out/')
