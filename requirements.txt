@@ -8,7 +8,7 @@ segmentation-models-pytorch
 matplotlib
 scipy
 wandb
-git+https://github.com/huggingface/diffusers.git
+diffusers
 git+https://github.com/huggingface/transformers.git
 git+https://github.com/huggingface/accelerate.git
 omegaconf
@@ -30,3 +30,5 @@ clip
 gdown
 openai
 openai-clip
+moviepy
+imageio

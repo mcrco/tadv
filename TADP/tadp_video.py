@@ -169,9 +169,12 @@ class TADPVid(pl.LightningModule):
             if self.cfg['cls_head'] == 'linear':
                 self.decode_head = LinearHead(num_classes=51, in_channels=320*64*64)
             if self.cfg['cls_head'] == 'rogerio':
-                self.decode_head = RogerioHead(num_classes=51, in_channels=320)
+                self.decode_head = RogerioHead(num_classes=51, in_channels=717)
             if self.cfg['cls_head'] == 'mlp':
-                self.decode_head = MLPHead(num_classes=51, in_channels=320)
+                self.decode_head = MLPHead(num_classes=51, in_channels=717)
+
+        if self.cfg['apply_batchnorm']:
+            self.batchnorm = nn.BatchNorm2d(717)
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
@@ -315,9 +318,11 @@ class TADPVid(pl.LightningModule):
             caption_batch = None
             if all_captions is not None:
                 caption_batch = all_captions[i * frames_per_batch:min(i * frames_per_batch + frames_per_batch, len(all_captions))]
-            features = self.extract_feat(img_batch, captions=caption_batch)[0]
+            features = self.extract_feat(img_batch, captions=caption_batch)[1]
             all_features.append(features)
         features = torch.cat(all_features)
+        if self.cfg['apply_batchnorm']:
+            features = self.batchnorm(features)
         features = features.reshape(n_batch, n_frames, *features.shape[1:])
 
         if not self.use_decode_head:
@@ -476,7 +481,7 @@ class TADPVid(pl.LightningModule):
             if self.log_ca:
                 self.logger.experiment.log({
                     'video': wandb.Video(frames, caption=self.class_names[label]),
-                    'cross_att_maps': [wandb.Image(ca_map, caption=self.blip_captions[metas[0]]) for ca_map in ca_maps[:16]]
+                    'cross_att_maps': [wandb.Image(ca_map, caption=self.blip_captions[metas[0]]) for ca_map in ca_maps[717:746]]
                 })
 
 def tensor_to_video(tensor, output_file='out/output_video.avi', fps=30):

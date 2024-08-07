@@ -4,7 +4,9 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch import Tensor
+import torch.nn.functional as F
+from torch import Tensor, log
+from torchmetrics import Accuracy
 from torchvision.datasets import HMDB51
 from torchvision.ops.boxes import torchvision
 from typing import Tuple
@@ -13,8 +15,9 @@ from torch.utils.data import DataLoader
 import torchvision.transforms as T
 import torchvision.transforms.v2 as T2
 import torchvision.models as models
-
 import datetime
+
+from TADP.tadv_heads import MLPClassifier, TransformerClassifier
 
 class HMDB51WithMetadata(HMDB51):
     def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor, int, str]:
@@ -104,8 +107,10 @@ class HMDB51DataModule(pl.LightningDataModule):
 
 # Define the PyTorch Lightning Module
 class ResNet50VideoClassifier(pl.LightningModule):
-    def __init__(self, num_classes, num_frames, learning_rate=1e-3, pretrained=True):
+    def __init__(self, num_classes, class_names, cls_head, learning_rate=1e-4, pretrained=True):
         super().__init__()
+
+        self.class_names = class_names
 
         # Load the pretrained ResNet-50 model
         self.resnet50 = models.resnet50(pretrained=pretrained, progress=True)
@@ -114,27 +119,38 @@ class ResNet50VideoClassifier(pl.LightningModule):
         self.resnet50.fc = nn.Identity()
 
         # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(1000 * num_frames, 512),
-            nn.SiLU(),
-            nn.Linear(512, num_classes)
-        )
+        self.cls_head = cls_head
+        if cls_head == 'mlp':
+            self.classifier = MLPClassifier()
+        elif cls_head == 'transformer':
+            self.embed = nn.Linear(2048, 512)
+            self.classifier = TransformerClassifier()
 
         self.lr = learning_rate
 
-        # Loss function
         self.criterion = nn.CrossEntropyLoss()
+        # Loss function
         self.accuracy = Accuracy(task='multiclass', num_classes=num_classes, top_k=1)
 
+    def _print_log(self, logits, labels):
+        probs = F.softmax(logits, 1).detach().cpu().numpy()
+        preds = torch.argmax(logits, 1).detach().cpu().numpy() 
+        print('predictions:', [self.class_names[pred] for pred in preds])
+        print('probabilities of preds:', [probs[i][c] for i,c in enumerate(preds)])
+        print('truth:', [self.class_names[truth] for truth in labels.detach().cpu().numpy()])
+
     def forward(self, x):
+        if type(x) is list:
+            x = torch.stack(x)
+
         # Extract features using ResNet-50
-        print(x.shape)
         n, f, c, h, w = x.shape
         x = x.view(n * f, c, h, w)
         features = self.resnet50(x)
-        print(features.shape)
-        features = features.view(n, f, features.shape[1:])
-        print(features.shape)
+        if self.cls_head == 'transformer':
+            features = self.embed(features)
+            features = features.reshape(n, f, 512)
+
         # Classify using the classification head
         logits = self.classifier(features)
         return logits
@@ -142,6 +158,7 @@ class ResNet50VideoClassifier(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         frames, labels, metas = batch
         logits = self(frames)
+        # self._print_log(logits, labels)
         loss = self.criterion(logits, labels)
         accuracy = self.accuracy(logits, labels)
         self.log_dict({
@@ -153,11 +170,12 @@ class ResNet50VideoClassifier(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         frames, labels, metas = batch
         logits = self(frames)
+        self._print_log(logits, labels)
         loss = self.criterion(logits, labels)
         accuracy = self.accuracy(logits, labels)
         self.log_dict({
-            'train_loss': loss, 
-            'train_acc': accuracy
+            'val_loss': loss, 
+            'val_acc': accuracy
         }, sync_dist=True)
         return loss
 
@@ -167,8 +185,8 @@ class ResNet50VideoClassifier(pl.LightningModule):
         loss = self.criterion(logits, labels)
         accuracy = self.accuracy(logits, labels)
         self.log_dict({
-            'train_loss': loss, 
-            'train_acc': accuracy
+            'test_loss': loss, 
+            'test_acc': accuracy
         }, sync_dist=True)
         return loss
 
@@ -180,15 +198,17 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--exp_name", type=str)
+    parser.add_argument("--cls_head", type=str, default='transformer')
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--log_freq", type=int, default=100)
-    parser.add_argument("--log_every_n_steps", type=int, default=1)
+    parser.add_argument("--log_every_n_steps", type=int, default=4)
     parser.add_argument("--log_model_every_n_epochs", type=int, default=-1)
     parser.add_argument("--check_val_every_n_epoch", type=int, default=1)
     parser.add_argument("--wandb_group", type=str, default="mcrco")
 
     # debugging presets
     parser.add_argument("--debug", action='store_true', default=False)
+    parser.add_argument("--no_wandb", action='store_true', default=False)
     parser.add_argument("--val_debug", action='store_true', default=False)
     parser.add_argument("--wandb_debug", action='store_true', default=False)
     # test remote machine if it is working without wasting time downloading datasets
@@ -197,7 +217,7 @@ def main():
     # experiment parameters
     parser.add_argument("--from_scratch", action='store_true', default=False)
     parser.add_argument("--max_epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint", type=str, default=None)
@@ -235,6 +255,8 @@ def main():
         log_freq = 1
         save_last = False
         save_topk = 0
+    if args.no_wandb:
+        os.environ["WANDB_MODE"] = "dryrun"
     if args.wandb_debug:
         num_workers = 0
         batch_size = 16 if 'TADP' not in args.model else batch_size
@@ -286,14 +308,13 @@ def main():
     callbacks = [lr_callback, checkpoint_callback]
 
     logger = pl.loggers.WandbLogger(
-        name=wandb_name or "segmentation_test, model={}".format(model_name) + "usingDecoderFeatures={}".format(
-            use_decoder_features),
+        name=wandb_name,
         group=wandb_group or "mcrco",
         project="tadvar",
         log_model=True,
     )
 
-    model = ResNet50VideoClassifier(51, learning_rate=1e-3, pretrained=pretrained)
+    model = ResNet50VideoClassifier(51, datamodule.train.classes, args.cls_head, learning_rate=1e-3, pretrained=pretrained)
 
     # watch model
     logger.watch(model, log="all", log_freq=log_freq)
@@ -310,7 +331,8 @@ def main():
         limit_val_batches=limit_val_batches,  # None unless --wandb_debug or --val_debug flag is set
         check_val_every_n_epoch=args.check_val_every_n_epoch,  # None unless --wandb_debug flag is set
         sync_batchnorm=True if args.num_gpus > 1 else False,
-        accumulate_grad_batches=accum_grad_batches
+        accumulate_grad_batches=accum_grad_batches,
+        gradient_clip_val=8.0
     )
     if trainer.global_rank == 0:
         logger.experiment.config.update(args)

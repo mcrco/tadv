@@ -143,6 +143,8 @@ def main():
     parser.add_argument('--freeze_backbone', type=int, default=0)
     parser.add_argument('--log_ca', action='store_true', default=False)
     parser.add_argument('--freeze_batchnorm', type=int, default=0)
+    parser.add_argument('--gradient_clip_val', type=float, default=10.0)
+    parser.add_argument('--apply_batchnorm', type=int, default=1)
 
     parser.add_argument("--accum_grad_batches", type=int, default=1)
     parser.add_argument("--freeze_text_adapter", type=int, default=1)
@@ -235,7 +237,7 @@ def main():
         os.path.join(base_path, f'{dataset_name}/videos'), 
         os.path.join(base_path, f'{dataset_name}/split_files'),
         num_frames=8,
-        max_frames = max_vid_frames,
+        max_frames = max_vid_frames - 1, # in case some videos don't have enough frames
         step=max_vid_frames + 10, # + 10 to be safe it's 1 clip per vid
         format="TCHW",
         batch_size=batch_size,
@@ -276,6 +278,7 @@ def main():
     cfg['cls_head'] = args.cls_head
     cfg['diffusion_batch_size'] = args.diffusion_batch_size
     cfg['normalize_videos'] = args.normalize_videos
+    cfg['apply_batchnorm'] = args.apply_batchnorm
 
     model = TADPVid(cfg=cfg, class_names=datamodule.train.classes, freeze_backbone=args.freeze_backbone, log_ca=args.log_ca)
 
@@ -313,7 +316,8 @@ def main():
         limit_val_batches=limit_val_batches,  # None unless --wandb_debug or --val_debug flag is set
         check_val_every_n_epoch=args.check_val_every_n_epoch,  # None unless --wandb_debug flag is set
         sync_batchnorm=True if args.num_gpus > 1 else False,
-        accumulate_grad_batches=accum_grad_batches
+        accumulate_grad_batches=accum_grad_batches,
+        gradient_clip_val=args.gradient_clip_val
     )
     if trainer.global_rank == 0:
         logger.experiment.config.update(args)

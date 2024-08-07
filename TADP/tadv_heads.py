@@ -36,7 +36,7 @@ class PositionalEncoding(nn.Module):
         return x + self.encoding[:, :x.size(1)].detach().to(x.get_device())
 
 class TransformerClassifier(nn.Module):
-    def __init__(self, num_layers, num_heads, embed_dim, hidden_dim, dropout, num_classes, num_frames=8):
+    def __init__(self, num_layers=6, num_heads=8, embed_dim=512, hidden_dim=2048, dropout=0.1, num_classes=51, num_frames=8):
         super().__init__()
         
         self.pos_encoding = PositionalEncoding(embed_dim, num_frames)
@@ -45,7 +45,8 @@ class TransformerClassifier(nn.Module):
                 d_model=embed_dim, 
                 nhead=num_heads, 
                 dim_feedforward=hidden_dim, 
-                dropout=dropout, 
+                dropout=dropout,
+                activation='gelu',
                 batch_first=True
                 )
         self.transformer_encoder = nn.TransformerEncoder(
@@ -54,20 +55,15 @@ class TransformerClassifier(nn.Module):
                 )
 
         self.fc1 = nn.Linear(num_frames * embed_dim, embed_dim)
-        self.relu = nn.ReLU()
+        self.activation = nn.LeakyReLU()
         self.fc2 = nn.Linear(embed_dim, num_classes)
-
-        # param_count = 0
-        # for p in self.parameters():
-        #     param_count += p.numel()
-        # print('transformer params', param_count)
 
     def forward(self, x):
         x = self.pos_encoding(x)
         x = self.transformer_encoder(x)
         x = x.reshape(x.shape[0], -1)
         x = self.fc1(x)
-        x = self.relu(x)
+        x = self.activation(x)
         x = self.fc2(x)
         return x
 
@@ -171,6 +167,30 @@ class RogerioHead(nn.Module):
         x = self.classifier(x)
         return x
 
+class MLPClassifier(nn.Module):
+    def __init__(self,
+                 num_classes=51,
+                 embed_dim=2048,
+                 hidden_dim=2048,
+                 num_frames=8,
+                 init_super=True):
+
+        if init_super:
+            super().__init__()
+
+        self.embed_dim = embed_dim
+        self.num_frames = num_frames
+
+        self.fc1 = nn.Linear(embed_dim * num_frames, hidden_dim)
+        self.relu = nn.LeakyReLU()
+        self.fc2 = nn.Linear(hidden_dim, num_classes)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
 class MLPHead(nn.Module):
     def __init__(self,
                  num_classes=6,
@@ -237,3 +257,4 @@ class MLPHead(nn.Module):
         x = self.mlp(x)
 
         return x
+
