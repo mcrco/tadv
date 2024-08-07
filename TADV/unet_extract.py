@@ -1,8 +1,9 @@
 import torch
 from typing import Dict, Tuple, Optional, Union, Any
-from diffusers.models import UNet3DConditionModel
+from diffusers.models.unets.unet_3d_condition import UNet3DConditionModel
+from attn_control import register_attn_hook
 
-def get_attn_unet(
+def extract_features(
         unet: UNet3DConditionModel,
         sample: torch.Tensor,
         timestep: Union[torch.Tensor, float, int],
@@ -74,7 +75,10 @@ def get_attn_unet(
             return_dict=False,
         )[0]
 
-        attns = []
+        features = [sample]
+        cross_attns = []
+        temp_attns = []
+        register_attn_hook(unet, cross_attns, temp_attns)
 
         # 3. down
         down_block_res_samples = (sample,)
@@ -88,7 +92,7 @@ def get_attn_unet(
                     num_frames=num_frames,
                     cross_attention_kwargs=cross_attention_kwargs,
                 )
-                attns.append(sample)
+                features.append(sample)
             else:
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb, num_frames=num_frames)
 
@@ -105,6 +109,12 @@ def get_attn_unet(
 
             down_block_res_samples = new_down_block_res_samples
 
-        for attn in attns:
-            print(attn.shape)
-        return attns
+        for i in range(3):
+            sample_shape = features[i].shape[-2:]
+            for j in range(2 * i, 2 * i + 2):
+                attn = cross_attns[j]
+                attn = attn.transpose(-1, -2)
+                attn = attn.reshape(*attn.shape[:-1], *sample_shape)
+                cross_attns[j] = attn
+
+        return features, cross_attns, temp_attns

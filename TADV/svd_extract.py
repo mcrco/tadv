@@ -2,9 +2,9 @@ import torch
 from diffusers.pipelines.text_to_video_synthesis.pipeline_text_to_video_synth import TextToVideoSDPipeline as T2VPipe
 from typing import Callable, Dict, List, Optional, Union, Any
 import torch
-from unet_cross_att import get_attn_unet
+from unet_extract import extract_features
 
-def get_attn_from_pipe(
+def pipe_features(
         pipe: T2VPipe,
         prompt: Union[str, List[str]] = None,
         height: Optional[int] = None,
@@ -93,16 +93,16 @@ def get_attn_from_pipe(
     # 7. Get attention for one timestep
     t = timesteps[0]
     latent_model_input = pipe.scheduler.scale_model_input(latents, t)
-    attns = get_attn_unet(
+    outs = extract_features(
         pipe.unet,
         latent_model_input,
         t,
         encoder_hidden_states=prompt_embeds,
         cross_attention_kwargs=cross_attention_kwargs,
         return_dict=False,
-    )[0]
+    )
 
     # 8. Offload all models
     pipe.maybe_free_model_hooks()
 
-    return attns
+    return outs

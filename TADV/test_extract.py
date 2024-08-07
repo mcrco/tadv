@@ -1,9 +1,9 @@
 import torch
-from diffusers import AutoencoderKL, DiffusionPipeline
+from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from torchvision.io import read_video
 import torchvision.transforms as T
 import torchvision.transforms.v2 as T2
-from svd_cross_att import get_attn_from_pipe
+from svd_extract import pipe_features
 import torch
 import matplotlib.pyplot as plt
 
@@ -27,13 +27,13 @@ def decode_latents(pipe, latents):
     video = video.float().permute(0, 2, 3, 1).clamp(0, 255).byte().cpu().numpy()
     return video
 
-def get_first_layer_attn(pipe, latents):
-    attns = get_attn_from_pipe(
+def extract(pipe, latents):
+    features, cross_attns, temp_attns = pipe_features(
         pipe=pipe,
-        prompt='field',
+        prompt='baseball player',
         latents=latents
     )
-    return attns
+    return features, cross_attns, temp_attns
 
 if __name__ == '__main__':
     pipe = DiffusionPipeline.from_pretrained("ali-vilab/text-to-video-ms-1.7b", torch_dtype=torch.float16, variant="fp16")
@@ -42,11 +42,16 @@ if __name__ == '__main__':
 
     latents = get_latents(pipe, video)
     latents = latents.permute(1, 0, 2, 3).unsqueeze(0)
-    attns = get_first_layer_attn(pipe, latents)
+    features, cross_attns, temp_attns = extract(pipe, latents)
+
+    print([feat.shape for feat in features])
+    print([attn.shape for attn in cross_attns])
+    print([attn.shape for attn in temp_attns])
 
     fig, axes = plt.subplots(2, 4, figsize=(10, 5))
     for i, ax in enumerate(axes.flatten()):
-        ax.imshow(attns[i][0].detach().cpu())
+        # ax.imshow(cross_attns[0][i][2].detach().cpu())
+        ax.imshow(features[0][i][0].detach().cpu())
         ax.axis('off')  # Hide the axes
 
     plt.tight_layout()
