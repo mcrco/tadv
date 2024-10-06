@@ -15,6 +15,6 @@ pip install torch
 pip install -r requirements.txt
 
 #git clone https://github.com/wl-zhao/VPD
-git clone https://github.com/damaggu/stable-diffusion
-mv stable-diffusion stable_diffusion
-cp -r stable_diffusion/ldm/ ./
+#git clone https://github.com/damaggu/stable-diffusion
+#mv stable-diffusion stable_diffusion
+#cp -r stable_diffusion/ldm/ ./

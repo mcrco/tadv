@@ -10,6 +10,7 @@ import time
 from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
+import matplotlib.pyplot as plt
 
 from ldm_cross_attention.util import instantiate_from_config
 from ldm_cross_attention.models.diffusion.ddim import DDIMSampler
@@ -195,6 +196,7 @@ def main():
         'only_save_summary': opt.only_save_summary,
         'save_to_numpy': opt.save_to_numpy}
     model = load_model_from_config(config, f"{opt.ckpt}")
+    # print(type(model))
     model.eval()
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -210,11 +212,68 @@ def main():
     os.makedirs(sample_path, exist_ok=True)
     base_count = 0
 
+    def plot_tensor_value_distributions(tensor):
+        """
+        Plots the value distributions of a tensor with shape (1, 3, H, W).
+
+        Args:
+        tensor (torch.Tensor): A tensor with shape (1, 3, H, W) where 1 is the batch dimension,
+                               3 is the number of channels (e.g., RGB), and H, W are height and width.
+        """
+        if tensor.shape[0] != 1 or tensor.shape[1] != 3:
+            raise ValueError("Expected tensor shape (1, 3, H, W).")
+
+        # Remove the batch dimension (1) by squeezing the tensor
+        tensor = tensor.squeeze(0)  # Now the shape is (3, H, W)
+
+        # Plot value distributions for each channel
+        channels = ['Red', 'Green', 'Blue']
+
+        plt.figure(figsize=(15, 5))
+
+        for i in range(3):
+            plt.subplot(1, 3, i + 1)
+            plt.hist(tensor[i].flatten().numpy(), bins=50, color=channels[i].lower())
+            plt.title(f'{channels[i]} Channel')
+            plt.xlabel('Pixel Value')
+            plt.ylabel('Frequency')
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_image(tensor, title=None):
+        """
+        Plots an image from a tensor.
+
+        Args:
+        tensor (torch.Tensor): A tensor representing an image. The tensor can be in the shape
+                               (C, H, W) or (1, C, H, W) where C is the number of channels,
+                               H is the height, and W is the width.
+        title (str, optional): The title for the plot.
+        """
+        if tensor.dim() == 4 and tensor.size(0) == 1:
+            tensor = tensor.squeeze(0)  # Remove batch dimension if present
+
+        if tensor.size(0) == 1:  # Grayscale image (1, H, W)
+            plt.imshow(tensor.squeeze(0), cmap='gray')
+        elif tensor.size(0) == 3:  # RGB image (3, H, W)
+            plt.imshow(tensor.permute(1, 2, 0))  # Change to (H, W, C) for plotting
+        else:
+            raise ValueError("Expected tensor with shape (C, H, W) where C is 1 or 3.")
+
+        if title:
+            plt.title(title)
+
+        plt.axis('off')  # Hide the axes
+        plt.show()
+
     def load_image(path):
         x_samples_ddim = Image.open(path)
         x_samples_ddim = torchvision.transforms.Resize((512, 512))(x_samples_ddim)
         x_samples_ddim = torch.tensor(np.array(x_samples_ddim)).permute(2, 0, 1).unsqueeze(0) / 255
+        #plot_image(x_samples_ddim)
         x_samples_ddim = x_samples_ddim.to('cuda')
+        first_stage = model.encode_first_stage(x_samples_ddim)
         code = model.get_first_stage_encoding(model.encode_first_stage(x_samples_ddim))
         return code
 
@@ -224,21 +283,22 @@ def main():
            }
     tcw = TextConditioningWrapper(cfg, model, class_embedding_path=opt.class_embedding_path)
 
-    pascal_img_path = 'data/VOCdevkit/VOC2012/JPEGImages/'
-    img_id_file = 'data/VOCdevkit/VOC2012/ImageSets/Segmentation/trainaug.txt'
-    with open(img_id_file, 'r') as f:
-        img_ids = f.readlines()
-    img_ids = [img_id.strip() for img_id in img_ids]
+    # pascal_img_path = 'data/VOCdevkit/VOC2012/JPEGImages/'
+    # img_id_file = 'data/VOCdevkit/VOC2012/ImageSets/Segmentation/trainaug.txt'
+    # with open(img_id_file, 'r') as f:
+    #     img_ids = f.readlines()
+    # img_ids = [img_id.strip() for img_id in img_ids]
 
-    img_ids = list(img_ids)
-    img_ids = img_ids[:opt.n_samples]
+    # img_ids = list(img_ids)
+    # img_ids = img_ids[:opt.n_samples]
 
     # this is the id for the main image in the paper, uncomment to append to list of images to visualize
     # img_ids.append('2010_001715')
 
     # batchify
+    root_img_path = 'ca_test'
+    img_ids = ['tadp']
     img_id_batches = list(chunk(img_ids, batch_size))
-    print(img_id_batches)
 
     precision_scope = autocast if opt.precision == "autocast" else nullcontext
     with torch.no_grad():
@@ -270,7 +330,7 @@ def main():
 
                     start_codes = []
                     for ii, img_id in enumerate(img_id_batch):
-                        start_codes.append(load_image(f'{pascal_img_path}/{img_id}.jpg'))
+                        start_codes.append(load_image(f'{root_img_path}/{img_id}.jpg'))
                     start_codes = torch.cat(start_codes, dim=0)
 
                     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
@@ -291,7 +351,7 @@ def main():
 
                     if not opt.skip_save:
                         for img_id in img_id_batch:
-                            img_path = os.path.join(pascal_img_path, f'{img_id}.jpg')
+                            img_path = os.path.join(root_img_path, f'{img_id}.jpg')
                             if not os.path.exists(os.path.join(sample_path, f'{img_id}.jpg')):
                                 os.symlink(img_path, os.path.join(sample_path, f'{img_id}.jpg'))
                             base_count += 1

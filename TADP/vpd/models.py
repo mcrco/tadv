@@ -29,6 +29,7 @@ def register_attention_control(model, controller):
         def forward(x, context=None, mask=None):
             h = self.heads
 
+            # B, H*W, H*D
             q = self.to_q(x)
             is_cross = context is not None
             context = default(context, x)
@@ -259,7 +260,7 @@ class UNetWrapper(nn.Module):
                     size = int(math.sqrt(up_attn.shape[1]))
                     attns[size].append(rearrange(up_attn, 'b (h w) c -> b c h w', h=size))
             attn16 = torch.stack(attns[self.size16]).mean(0)
-            attn32 = torch.stack(attns[self.size32]).mean(0)
+            attn32 = torch.stack(attns[self.size32][:-1]).mean(0)
             if len(attns[self.size64]) > 0:
                 attn64 = torch.stack(attns[self.size64]).mean(0)
             else:

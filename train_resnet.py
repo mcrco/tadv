@@ -5,10 +5,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch import Tensor, log
+from einops import rearrange
+from torch import Tensor, load, log
 from torchmetrics import Accuracy
-from torchvision.datasets import HMDB51
-from torchvision.ops.boxes import torchvision
+from train_video import HMDB51DataModule
 from typing import Tuple
 import lightning.pytorch as pl
 from torch.utils.data import DataLoader
@@ -19,112 +19,44 @@ import datetime
 
 from TADP.tadv_heads import MLPClassifier, TransformerClassifier
 
-class HMDB51WithMetadata(HMDB51):
-    def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor, int, str]:
-        video, audio, _, video_idx = self.video_clips.get_clip(idx)
-        video_path = self.video_clips.metadata['video_paths'][video_idx]
-        video_name = os.path.splitext(os.path.basename(video_path))[0]
-        sample_index = self.indices[video_idx]
-        _, class_index = self.samples[sample_index]
-
-        if self.transform is not None:
-            video = self.transform(video)
-
-        return video, audio, class_index, video_name
-
-class HMDB51DataModule(pl.LightningDataModule):
-    def __init__(self, video_path, split_file_path, num_frames, max_frames, step, format, batch_size, num_workers, normalize_videos):
-        super().__init__()
-        self.video_path = video_path
-        self.split_file_path = split_file_path
-        self.num_frames = num_frames
-        self.max_frames = max_frames
-        self.step = step
-        self.format = format
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-
-        def convert_to_float(x):
-            if type(x) is list:
-                x = torch.stack(x)
-            if isinstance(x, torch.Tensor) and x.type() != torch.cuda.FloatTensor:
-                x = x.float()
-            return x
-
-        frame_resize = torchvision.transforms.Resize((512, 512))
-        def resize_transform(video):
-            trans_frames = []
-            for frame in video:
-                trans_frames.append(frame_resize(frame))
-            return torch.stack(trans_frames)
-
-        norm_fn = T.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225])
-        def normalize(video):
-            norm_frames = [norm_fn(frame) for frame in video]
-            return torch.stack(norm_frames)
-
-        sample_frames = T2.UniformTemporalSubsample(self.num_frames)
-
-        def transform(video):
-            video = sample_frames(video)
-            video = convert_to_float(video)
-            if normalize_videos: 
-                video = normalize(video)
-            return resize_transform(video)
-
-        self.train = HMDB51WithMetadata(self.video_path, 
-            self.split_file_path,
-            frames_per_clip=self.max_frames,
-            step_between_clips=self.step,
-            output_format=self.format,
-            transform=transform,
-            train=True
-        )
-        self.test = HMDB51WithMetadata(self.video_path, 
-            self.split_file_path,
-            frames_per_clip=self.max_frames,
-            step_between_clips=self.step,
-            output_format=self.format,
-            transform=transform,
-            train=False
-        )
-
-        def collate_function(data):
-            videos = [vid[0].to(dtype=torch.float32) for vid in data]
-            video_names = [vid[3] for vid in data]
-            labels = torch.tensor([vid[2] for vid in data], dtype=torch.long)
-            return videos, labels, video_names
-        self.collate_function = collate_function
-
-    def train_dataloader(self):
-        return DataLoader(self.train, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, collate_fn=self.collate_function)
-
-    def val_dataloader(self):
-        return DataLoader(self.test, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, collate_fn=self.collate_function)
-
-    def test_dataloader(self):
-        return DataLoader(self.test, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, collate_fn=self.collate_function)
-
 # Define the PyTorch Lightning Module
 class ResNet50VideoClassifier(pl.LightningModule):
-    def __init__(self, num_classes, class_names, cls_head, learning_rate=1e-4, pretrained=True):
+    def __init__(self, num_classes, class_names, norm_feats=True, cls_head='transformer', learning_rate=1e-3, pretrained=True, frozen=False, load_from_ckpt=False, batch_size=4):
         super().__init__()
 
         self.class_names = class_names
 
         # Load the pretrained ResNet-50 model
         self.resnet50 = models.resnet50(pretrained=pretrained, progress=True)
-        
         # Replace the final fully connected layer with an identity layer
         self.resnet50.fc = nn.Identity()
+        # Freeze resnet
+        self.frozen = frozen
+        if self.frozen:
+            for param in self.resnet50.parameters():
+                param.requires_grad = False
+
+        self.load_from_ckpt = load_from_ckpt
+
+        self.batch_size = batch_size
+
+        self.norm_feats = norm_feats
+        if self.norm_feats:
+            self.batchnorm = nn.BatchNorm1d(2048)
 
         # Classification head
         self.cls_head = cls_head
-        if cls_head == 'mlp':
-            self.classifier = MLPClassifier()
-        elif cls_head == 'transformer':
-            self.embed = nn.Linear(2048, 512)
-            self.classifier = TransformerClassifier()
+        if self.cls_head == 'transformer':
+            self.classifier = TransformerClassifier(embed_dim=2048, num_layers=2)
+        elif self.cls_head == 'mlp':
+            self.classifier = MLPClassifier(
+                num_classes=51,
+                embed_dim=2048,
+                hidden_dim=2048,
+                num_frames=8
+            )
+        else:
+            raise Exception(f"Invalid head: {self.cls_head}")
 
         self.lr = learning_rate
 
@@ -132,12 +64,23 @@ class ResNet50VideoClassifier(pl.LightningModule):
         # Loss function
         self.accuracy = Accuracy(task='multiclass', num_classes=num_classes, top_k=1)
 
+    def init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+    def setup(self, stage=None):
+        if not self.load_from_ckpt:
+            self.classifier.apply(self.init_weights)
+
     def _print_log(self, logits, labels):
         probs = F.softmax(logits, 1).detach().cpu().numpy()
-        preds = torch.argmax(logits, 1).detach().cpu().numpy() 
-        print('predictions:', [self.class_names[pred] for pred in preds])
+        preds = torch.argmax(logits, 1).detach().cpu().numpy()
+        pred_labels = [pred for pred in preds] if len(self.class_names) < 51 else [self.class_names[pred] for pred in preds]
+        print('\npredictions:', pred_labels)
         print('probabilities of preds:', [probs[i][c] for i,c in enumerate(preds)])
-        print('truth:', [self.class_names[truth] for truth in labels.detach().cpu().numpy()])
+        print('truth:', [self.class_names[truth] for truth in labels.detach().cpu().numpy()], '\n')
 
     def forward(self, x):
         if type(x) is list:
@@ -145,11 +88,20 @@ class ResNet50VideoClassifier(pl.LightningModule):
 
         # Extract features using ResNet-50
         n, f, c, h, w = x.shape
-        x = x.view(n * f, c, h, w)
-        features = self.resnet50(x)
+        x = x.reshape(n * f, c, h, w)
+
+        features = []
+        batches = torch.split(x, self.batch_size)
+        for batch in batches:
+            features.append(self.resnet50(batch))
+        features = torch.cat(features)
+
+        if self.norm_feats:
+            features = self.batchnorm(features)
         if self.cls_head == 'transformer':
-            features = self.embed(features)
-            features = features.reshape(n, f, 512)
+            features = features.reshape(n, f, features.shape[1])
+        if self.cls_head == 'mlp':
+            features = rearrange(features, '(n f) c -> n (f c)', n=n, f=f, c=2048)
 
         # Classify using the classification head
         logits = self.classifier(features)
@@ -170,7 +122,8 @@ class ResNet50VideoClassifier(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         frames, labels, metas = batch
         logits = self(frames)
-        self._print_log(logits, labels)
+        if batch_idx % 10 == 0:
+            self._print_log(logits, labels)
         loss = self.criterion(logits, labels)
         accuracy = self.accuracy(logits, labels)
         self.log_dict({
@@ -197,9 +150,9 @@ class ResNet50VideoClassifier(pl.LightningModule):
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--exp_name", type=str)
+    parser.add_argument("--exp_name", type=str, default='hmdb_resnet')
     parser.add_argument("--cls_head", type=str, default='transformer')
-    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--log_freq", type=int, default=100)
     parser.add_argument("--log_every_n_steps", type=int, default=4)
     parser.add_argument("--log_model_every_n_epochs", type=int, default=-1)
@@ -215,9 +168,11 @@ def main():
     parser.add_argument("--test_machine", action='store_true', default=False)
 
     # experiment parameters
-    parser.add_argument("--from_scratch", action='store_true', default=False)
-    parser.add_argument("--max_epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--pretrained", type=int, default=True)
+    parser.add_argument("--frozen", type=int, default=True)
+    parser.add_argument("--max_epochs", type=int, default=300)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--resnet_batch_size", type=int, default=8)
     parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint", type=str, default=None)
@@ -225,13 +180,12 @@ def main():
     parser.add_argument('--strategy', type=str, default='')
     parser.add_argument('--ckpt_path', type=str, default='')
     parser.add_argument("--accum_grad_batches", type=int, default=1)
-    parser.add_argument('--normalize_videos', action='store_true', default=True)
     parser.add_argument('--trainer_ckpt_path', type=str, default=None)
     parser.add_argument('--save_checkpoint_path', type=str, default='out/')
     parser.add_argument('--train_debug', action='store_true', default=False)
     args = parser.parse_args()
 
-    pretrained = not args.from_scratch
+    pretrained = args.pretrained
     max_epochs = args.max_epochs
     batch_size = args.batch_size
     num_workers = args.num_workers
@@ -285,15 +239,14 @@ def main():
     if args.debug:
         dataset_name = 'hmdb-small'
     datamodule = HMDB51DataModule(
-        os.path.join(base_path, f'{dataset_name}/videos'), 
+        os.path.join(base_path, f'{dataset_name}/sampled_videos'),
         os.path.join(base_path, f'{dataset_name}/split_files'),
         num_frames=8,
         max_frames = max_vid_frames,
         step=max_vid_frames + 10, # + 10 to be safe it's 1 clip per vid
         format="TCHW",
         batch_size=batch_size,
-        num_workers=num_workers,
-        normalize_videos=args.normalize_videos
+        num_workers=num_workers
     )
 
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
@@ -314,7 +267,16 @@ def main():
         log_model=True,
     )
 
-    model = ResNet50VideoClassifier(51, datamodule.train.classes, args.cls_head, learning_rate=1e-3, pretrained=pretrained)
+    load_ckpt = args.trainer_ckpt_path is not None
+    model = ResNet50VideoClassifier(num_classes=51,
+                                    class_names=datamodule.train.classes,
+                                    norm_feats=True,
+                                    cls_head=args.cls_head,
+                                    learning_rate=1e-3,
+                                    pretrained=pretrained,
+                                    frozen=args.frozen,
+                                    load_from_ckpt=load_ckpt,
+                                    batch_size=args.resnet_batch_size)
 
     # watch model
     logger.watch(model, log="all", log_freq=log_freq)
@@ -332,7 +294,7 @@ def main():
         check_val_every_n_epoch=args.check_val_every_n_epoch,  # None unless --wandb_debug flag is set
         sync_batchnorm=True if args.num_gpus > 1 else False,
         accumulate_grad_batches=accum_grad_batches,
-        gradient_clip_val=8.0
+        gradient_clip_val=12.0
     )
     if trainer.global_rank == 0:
         logger.experiment.config.update(args)

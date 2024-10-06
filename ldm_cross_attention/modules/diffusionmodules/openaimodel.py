@@ -734,14 +734,14 @@ class UNetModel(nn.Module):
             'down32_1', 'down32_2',
             'down16_1', 'down16_2',
             'mid8_1',
-            'up16_1', 'up16_2',
-            'up32_1', 'up32_2',
+            'up16_1', 'up16_2', 'up16_3',
+            'up32_1', 'up32_2', 'up32_3',
             'up64_1', 'up64_2', 'up64_3',
         ]
         avg_group_map = {
             'overall': ca_keys,
             '64': ['down64_1', 'down64_2', 'up64_1', 'up64_2', 'up64_3'],
-            '32': ['down32_1', 'down32_2', 'up32_1', 'up32_2'],\
+            '32': ['down32_1', 'down32_2', 'up32_1', 'up32_2'],
             '16': ['down16_1', 'down16_2', 'up16_1', 'up16_2'],
             'down64': ['down64_1', 'down64_2'],
             'down32': ['down32_1', 'down32_2'],

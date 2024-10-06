@@ -1,0 +1,14 @@
+{
+    "tadp": {
+        "captions": "a dog and a bird"
+    },
+    "dog": {
+        "captions": "dog bird human background"
+    },
+    "bird": {
+        "captions": "dog bird human background"
+    },
+    "both": {
+        "captions": "dog bird human background"
+    }
+}

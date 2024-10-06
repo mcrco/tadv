@@ -423,6 +423,7 @@ class DDPM(pl.LightningModule):
 
 
 class LatentDiffusion(DDPM):
+
     """main class"""
     def __init__(self,
                  first_stage_config,

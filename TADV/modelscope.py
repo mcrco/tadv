@@ -6,6 +6,6 @@ pipe = DiffusionPipeline.from_pretrained("ali-vilab/text-to-video-ms-1.7b", torc
 pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
 pipe.enable_model_cpu_offload()
 
-prompt = "bunny turning head side to side"
-video_frames = pipe(prompt, num_inference_steps=25).frames
-video_path = export_to_video(video_frames, './videos/modelscope.mp4')
+prompt = "a man standing and waving his hand with a white background"
+video_frames = pipe(prompt, num_inference_steps=25).frames[0]
+video_path = export_to_video(video_frames, './videos/man.mp4')

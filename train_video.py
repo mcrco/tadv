@@ -30,7 +30,7 @@ class HMDB51WithMetadata(HMDB51):
         return video, audio, class_index, video_name
 
 class HMDB51DataModule(pl.LightningDataModule):
-    def __init__(self, video_path, split_file_path, num_frames, max_frames, step, format, batch_size, num_workers, normalize_videos):
+    def __init__(self, video_path, split_file_path, num_frames, max_frames, step, format, batch_size, num_workers):
         super().__init__()
         self.video_path = video_path
         self.split_file_path = split_file_path
@@ -48,25 +48,18 @@ class HMDB51DataModule(pl.LightningDataModule):
                 x = x.float()
             return x
 
-        frame_resize = torchvision.transforms.Resize((512, 512))
+        frame_resize = torchvision.transforms.Resize((512, 512), antialias=False)
         def resize_transform(video):
             trans_frames = []
             for frame in video:
                 trans_frames.append(frame_resize(frame))
             return torch.stack(trans_frames)
 
-        norm_fn = T.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225])
-        def normalize(video):
-            norm_frames = [norm_fn(frame) for frame in video]
-            return torch.stack(norm_frames)
-
         sample_frames = T2.UniformTemporalSubsample(self.num_frames)
 
         def transform(video):
             video = sample_frames(video)
             video = convert_to_float(video)
-            if normalize_videos: 
-                video = normalize(video)
             return resize_transform(video)
 
         self.train = HMDB51WithMetadata(self.video_path, 
@@ -131,7 +124,7 @@ def main():
     parser.add_argument("--model_name", type=str, default="DeeplabV3Plus")
     parser.add_argument("--from_scratch", action='store_true', default=False)
     parser.add_argument("--max_epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_gpus", type=int, default=torch.cuda.device_count())
     parser.add_argument("--val_batch_size", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
@@ -165,9 +158,8 @@ def main():
     parser.add_argument('--no_attn', action='store_true', default=False)
     parser.add_argument('--use_only_attn', action='store_true', default=False)
     parser.add_argument('--present_class_embeds_only', action='store_true', default=False)
-    parser.add_argument('--cls_head', type=str, default='neehar')
+    parser.add_argument('--cls_head', type=str, default='rogerio')
     parser.add_argument('--diffusion_batch_size', type=int, default=8)
-    parser.add_argument('--normalize_videos', action='store_true', default=True)
 
     parser.add_argument('--trainer_ckpt_path', type=str, default=None)
     parser.add_argument('--save_checkpoint_path', type=str, default='out/')
@@ -234,15 +226,14 @@ def main():
     if args.debug:
         dataset_name = 'hmdb-small'
     datamodule = HMDB51DataModule(
-        os.path.join(base_path, f'{dataset_name}/videos'), 
+        os.path.join(base_path, f'{dataset_name}/sampled_videos'), 
         os.path.join(base_path, f'{dataset_name}/split_files'),
         num_frames=8,
         max_frames = max_vid_frames - 1, # in case some videos don't have enough frames
         step=max_vid_frames + 10, # + 10 to be safe it's 1 clip per vid
         format="TCHW",
         batch_size=batch_size,
-        num_workers=num_workers,
-        normalize_videos=args.normalize_videos
+        num_workers=num_workers
     )
 
     cfg = yaml.load(open("./sd_tune.yaml", "r"), Loader=yaml.FullLoader)
@@ -277,10 +268,30 @@ def main():
     cfg['cross_blip_caption_path'] = args.cross_blip_caption_path
     cfg['cls_head'] = args.cls_head
     cfg['diffusion_batch_size'] = args.diffusion_batch_size
-    cfg['normalize_videos'] = args.normalize_videos
     cfg['apply_batchnorm'] = args.apply_batchnorm
 
-    model = TADPVid(cfg=cfg, class_names=datamodule.train.classes, freeze_backbone=args.freeze_backbone, log_ca=args.log_ca)
+    head_cfg = {
+        'num_classes': 51,
+        # 'num_channels': 717,
+        'embed_dim': 4096,
+        'hidden_dim': 2048,
+        'num_heads': 8,
+        'num_layers': 2,
+        'linear_dropout': 0.5,
+        'conv_dropout': 0.1,
+        'num_frames': 8,
+        'init_super': True
+    }
+
+    if 'blip' in cfg['text_conditioning']:
+        head_cfg['num_channels'] = 717
+    elif 'class_names' in cfg['text_conditioning']:
+        head_cfg['num_channels'] = 640 + head_cfg['num_classes']
+    
+    if cfg['use_only_attn']:
+        head_cfg['num_channels'] -= 640
+
+    model = TADPVid(cfg=cfg, class_names=datamodule.train.classes, freeze_backbone=args.freeze_backbone, log_ca=args.log_ca, head_cfg=head_cfg)
 
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
         dirpath=f'./checkpoints/{args.exp_name}/',
